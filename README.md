@@ -1,17 +1,17 @@
-# simple_sf2
+# simple_e4b
  
-A C++17 header-only simple SoundFont2 reader.
+A C++17 header-only simple Emulator EOS file reader.
 
-To use it, all you need to do is copy both "sf2_types.hpp" and "simple_sf2.hpp" to your project and then simply include "simple_sf2.hpp".
+To use it, all you need to do is copy both "e4b_types.hpp" and "simple_e4b.hpp" to your project and then simply include "simple_e4b.hpp".
 
 Code Example:
 ```cpp
-#include "simple_sf2.hpp"
+#include "simple_e4b.hpp"
 
 ...
 
-simple_sf2::SF2Bank bank;
-if(simple_sf2::ReadSF2(SOUNDBANK_PATH, bank) == simple_sf2::ESF2ReadResult::READ_SUCCESS)
+simple_e4b::E4BBank bank;
+if(simple_e4b::ReadE4B(SOUNDBANK_PATH, bank) == simple_e4b::EE4BReadResult::READ_SUCCESS)
 {
 	//  Use bank result ...
 }
