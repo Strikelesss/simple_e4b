@@ -173,15 +173,35 @@ namespace simple_e4b
 
 		[[nodiscard]] std::weak_ptr<E4Preset> GetPreset(const uint16_t presetIndex) const
 		{
-			for(const auto& preset : m_presets)
+			const auto& findResult(std::find_if(m_presets.begin(), m_presets.end(), [&](const auto& elem)
 			{
-				if(preset->m_index == presetIndex)
-				{
-					return std::weak_ptr<E4Preset>(preset);
-				}
-			}
+				return elem->m_index == presetIndex;
+			}));
 
+			if(findResult != m_presets.end()) { return std::weak_ptr<E4Preset>(*findResult); }
 			return std::weak_ptr<E4Preset>();
+		}
+
+		[[nodiscard]] std::weak_ptr<E3Sample> GetSample(const uint16_t sampleIndex) const
+		{
+			const auto& findResult(std::find_if(m_samples.begin(), m_samples.end(), [&](const auto& elem)
+			{
+				return elem->m_index == sampleIndex;
+			}));
+
+			if(findResult != m_samples.end()) { return std::weak_ptr<E3Sample>(*findResult); }
+			return std::weak_ptr<E3Sample>();
+		}
+
+		[[nodiscard]] std::weak_ptr<E4Sequence> GetSequence(const uint16_t sequenceIndex) const
+		{
+			const auto& findResult(std::find_if(m_sequences.begin(), m_sequences.end(), [&](const auto& elem)
+			{
+				return elem->m_index == sequenceIndex;
+			}));
+
+			if(findResult != m_sequences.end()) { return std::weak_ptr<E4Sequence>(*findResult); }
+			return std::weak_ptr<E4Sequence>();
 		}
 
 		[[nodiscard]] const std::vector<std::shared_ptr<E4Preset> >& GetPresets() const { return m_presets; }
