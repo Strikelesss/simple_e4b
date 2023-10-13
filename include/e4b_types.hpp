@@ -343,17 +343,20 @@ namespace simple_e4b
 	{
 		E4Envelope() = default;
 
+		// Either of the attacks can be 'Attack'
+		// E.G. if Attack1 level is 0, Attack2 serves as 'Attack'
+		// or if Attack1 level is 100, Attack1 serves as 'Attack'
 		uint8_t m_attack1Sec = 0ui8;
 		int8_t m_attack1Level = 0i8;
 		uint8_t m_attack2Sec = 0ui8;
 		int8_t m_attack2Level = 127i8;
 
-		uint8_t m_decay1Sec = 0ui8;
+		uint8_t m_decay1Sec = 0ui8; // A.K.A. 'Hold'
 		int8_t m_decay1Level = 127i8;
-		uint8_t m_decay2Sec = 0ui8;
-		int8_t m_decay2Level = 127i8;
+		uint8_t m_decay2Sec = 0ui8; // A.K.A. 'Decay'
+		int8_t m_decay2Level = 127i8; // A.K.A. 'Sustain'
 
-		uint8_t m_release1Sec = 0ui8;
+		uint8_t m_release1Sec = 0ui8; // A.K.A. 'Release'
 		int8_t m_release1Level = 0i8;
 		uint8_t m_release2Sec = 0ui8;
 		int8_t m_release2Level = 0i8;
@@ -895,19 +898,13 @@ namespace simple_e4b
 			voiceDataSize = std::byteswap(voiceDataSize);
 			
 			assert(voiceDataSize % 22 == 20);
-			if(voiceDataSize % 22 != 20)
-			{
-				return;
-			}
+			if(voiceDataSize % 22 != 20) { return; }
 
 			uint8_t zoneCount(0ui8);
 			stream.read(reinterpret_cast<char*>(&zoneCount), sizeof(uint8_t));
 
 			assert(zoneCount > 0ui8);
-			if(zoneCount == 0ui8)
-			{
-				return;
-			}
+			if(zoneCount == 0ui8) { return; }
 			
 			stream.read(reinterpret_cast<char*>(&m_group), sizeof(uint8_t));
 
