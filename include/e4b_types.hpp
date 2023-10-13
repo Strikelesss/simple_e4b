@@ -3,6 +3,7 @@
 #include <cassert>
 #include <string_view>
 #include <fstream>
+#include "include/byteswap_helpers.h"
 
 namespace simple_e4b
 {
@@ -51,7 +52,7 @@ namespace simple_e4b
 			stream.write(m_chunkName.data(), FORM_CHUNK_MAX_NAME_LEN);
 
 			// We override the chunk size here specifically for the TOC subchunks.
-			const uint32_t chunkSize(std::byteswap(m_readChunkSize > 0u ? m_readChunkSize : GetFullSize(true) - 8u));
+			const uint32_t chunkSize(byteswap_helpers::byteswap_uint32(m_readChunkSize > 0u ? m_readChunkSize : GetFullSize(true) - 8u));
 			stream.write(reinterpret_cast<const char*>(&chunkSize), sizeof(uint32_t));
 
 			if(!m_writtenData.empty())
@@ -72,7 +73,7 @@ namespace simple_e4b
 			stream.read(m_chunkName.data(), FORM_CHUNK_MAX_NAME_LEN);
 			
 			stream.read(reinterpret_cast<char*>(&m_readChunkSize), sizeof(uint32_t));
-			m_readChunkSize = std::byteswap(m_readChunkSize);
+			m_readChunkSize = byteswap_helpers::byteswap_uint32(m_readChunkSize);
 		}
 
 		[[nodiscard]] std::string_view GetName() const { return m_chunkName; }
@@ -147,18 +148,16 @@ namespace simple_e4b
 
 		inline double round_d_places(const double value, const uint32_t places)
 		{
-			std::string placesStr("1");
-			for(uint32_t i(0u); i < places; ++i) { placesStr.append("0"); }
-			const double convertedPlace(static_cast<double>(std::stoi(placesStr)));
-			return std::ceil(value * convertedPlace) / convertedPlace;
+			double convertedPlaces(1.0);
+			for(uint32_t i(0u); i < places; ++i) { convertedPlaces *= 10.0; }
+			return std::ceil(value * convertedPlaces) / convertedPlaces;
 		}
 
 		inline float round_f_places(const float value, const uint32_t places)
 		{
-			std::string placesStr("1");
-			for(uint32_t i(0u); i < places; ++i) { placesStr.append("0"); }
-			const float convertedPlace(static_cast<float>(std::stoi(placesStr)));
-			return std::ceilf(value * convertedPlace) / convertedPlace;
+			float convertedPlaces(1.f);
+			for(uint32_t i(0u); i < places; ++i) { convertedPlaces *= 10.f; }
+			return std::ceilf(value * convertedPlaces) / convertedPlaces;
 		}
 		
 		inline uint16_t ConvertByteToFilterFrequency(const std::uint8_t b)
@@ -277,14 +276,14 @@ namespace simple_e4b
 		E4SampleZone() = default;
 		
 		explicit E4SampleZone(const uint16_t sampleIndex, const MidiNote& originalKey)
-			: m_sampleIndex(std::byteswap(sampleIndex)), m_originalKey(originalKey) {}
+			: m_sampleIndex(byteswap_helpers::byteswap_uint16(sampleIndex)), m_originalKey(originalKey) {}
 
 		void Write(FORMChunk& presetChunk) const
 		{
 			presetChunk.writeType(reinterpret_cast<const char*>(&m_keyData), sizeof(E4SampleZoneNoteData));
 			presetChunk.writeType(reinterpret_cast<const char*>(&m_velData), sizeof(E4SampleZoneNoteData));
 			
-			const uint16_t sampleIndex(std::byteswap(m_sampleIndex));
+			const uint16_t sampleIndex(byteswap_helpers::byteswap_uint16(m_sampleIndex));
 			presetChunk.writeType(reinterpret_cast<const char*>(&sampleIndex), sizeof(uint16_t));
 
 			const char* null(nullptr);
@@ -308,7 +307,7 @@ namespace simple_e4b
 			stream.read(reinterpret_cast<char*>(&m_velData), sizeof(E4SampleZoneNoteData));
 			
 			stream.read(reinterpret_cast<char*>(&m_sampleIndex), sizeof(uint16_t));
-			m_sampleIndex = std::byteswap(m_sampleIndex);
+			m_sampleIndex = byteswap_helpers::byteswap_uint16(m_sampleIndex);
 
 			stream.ignore(1);
 
@@ -342,7 +341,7 @@ namespace simple_e4b
 	struct E4Envelope final
 	{
 		E4Envelope() = default;
-
+		
 		// Either of the attacks can be 'Attack'
 		// E.G. if Attack1 level is 0, Attack2 serves as 'Attack'
 		// or if Attack1 level is 100, Attack1 serves as 'Attack'
@@ -784,7 +783,7 @@ namespace simple_e4b
 
 		void Write(FORMChunk& presetChunk) const
 		{
-			const uint16_t voiceDataSize(std::byteswap(static_cast<uint16_t>(284 + 22 * m_zones.size())));
+			const uint16_t voiceDataSize(byteswap_helpers::byteswap_uint16(static_cast<uint16_t>(284 + 22 * m_zones.size())));
 			presetChunk.writeType(reinterpret_cast<const char*>(&voiceDataSize), sizeof(uint16_t));
 
 			const uint8_t zoneCount(static_cast<uint8_t>(m_zones.size()));
@@ -803,7 +802,7 @@ namespace simple_e4b
 			
 			presetChunk.writeType(reinterpret_cast<const char*>(&m_keyAssignGroup), sizeof(EEOSAssignGroup));
 			
-			const uint16_t keyDelay(std::byteswap(m_keyDelay));
+			const uint16_t keyDelay(byteswap_helpers::byteswap_uint16(m_keyDelay));
 			presetChunk.writeType(reinterpret_cast<const char*>(&keyDelay), sizeof(uint16_t));
 
 			presetChunk.writeType(null, 3);
@@ -895,16 +894,22 @@ namespace simple_e4b
 		{
 			uint16_t voiceDataSize(0ui16);
 			stream.read(reinterpret_cast<char*>(&voiceDataSize), sizeof(uint16_t));
-			voiceDataSize = std::byteswap(voiceDataSize);
+			voiceDataSize = byteswap_helpers::byteswap_uint16(voiceDataSize);
 			
 			assert(voiceDataSize % 22 == 20);
-			if(voiceDataSize % 22 != 20) { return; }
+			if(voiceDataSize % 22 != 20)
+			{
+				return;
+			}
 
 			uint8_t zoneCount(0ui8);
 			stream.read(reinterpret_cast<char*>(&zoneCount), sizeof(uint8_t));
 
 			assert(zoneCount > 0ui8);
-			if(zoneCount == 0ui8) { return; }
+			if(zoneCount == 0ui8)
+			{
+				return;
+			}
 			
 			stream.read(reinterpret_cast<char*>(&m_group), sizeof(uint8_t));
 
@@ -919,7 +924,7 @@ namespace simple_e4b
 			stream.read(reinterpret_cast<char*>(&m_keyAssignGroup), sizeof(EEOSAssignGroup));
 			
 			stream.read(reinterpret_cast<char*>(&m_keyDelay), sizeof(uint16_t));
-			m_keyDelay = std::byteswap(m_keyDelay);
+			m_keyDelay = byteswap_helpers::byteswap_uint16(m_keyDelay);
 
 			stream.ignore(3);
 
@@ -1098,15 +1103,15 @@ namespace simple_e4b
 				ApplyEOSNamingStandards(m_name);
 			}
 			
-			const uint16_t index(std::byteswap(m_index));
+			const uint16_t index(byteswap_helpers::byteswap_uint16(m_index));
 			presetChunk.writeType(reinterpret_cast<const char*>(&index), sizeof(uint16_t));
 			
 			presetChunk.writeType(m_name.data(), EOS_E4_MAX_NAME_LEN);
 
-			constexpr uint16_t unknown(std::byteswap(82ui16));
+			constexpr uint16_t unknown(byteswap_helpers::byteswap_uint16(82ui16));
 			presetChunk.writeType(reinterpret_cast<const char*>(&unknown), sizeof(uint16_t));
 
-			const uint16_t numVoices(std::byteswap(static_cast<uint16_t>(m_voices.size())));
+			const uint16_t numVoices(byteswap_helpers::byteswap_uint16(static_cast<uint16_t>(m_voices.size())));
 			presetChunk.writeType(reinterpret_cast<const char*>(&numVoices), sizeof(uint16_t));
 
 			const char* null(nullptr);
@@ -1133,7 +1138,7 @@ namespace simple_e4b
 		void Read(std::ifstream& stream)
 		{
 			stream.read(reinterpret_cast<char*>(&m_index), sizeof(uint16_t));
-			m_index = std::byteswap(m_index);
+			m_index = byteswap_helpers::byteswap_uint16(m_index);
 
 			m_name.clear();
 			m_name.resize(EOS_E4_MAX_NAME_LEN);
@@ -1141,7 +1146,7 @@ namespace simple_e4b
 
 			uint16_t unknown;
 			stream.read(reinterpret_cast<char*>(&unknown), sizeof(uint16_t));
-			unknown = std::byteswap(unknown);
+			unknown = byteswap_helpers::byteswap_uint16(unknown);
 
 			// Data size is always generally 82, ensure this.
 			if(unknown != 82ui16)
@@ -1152,7 +1157,7 @@ namespace simple_e4b
 
 			uint16_t numVoices;
 			stream.read(reinterpret_cast<char*>(&numVoices), sizeof(uint16_t));
-			numVoices = std::byteswap(numVoices);
+			numVoices = byteswap_helpers::byteswap_uint16(numVoices);
 
 			stream.ignore(4);
 
@@ -1232,8 +1237,10 @@ namespace simple_e4b
 		E3SampleParams() = default;
 
 		explicit E3SampleParams(const uint32_t numSamples, const uint32_t numChannels, const uint32_t loopStart, const uint32_t loopEnd)
-			: m_sampleStartR(numChannels == 1u ? 0u : numSamples + 92u), m_sampleEndL(numSamples + 92u - 2u), m_sampleEndR(numChannels == 1u ? numSamples + 92u - 2u : numSamples * 2u + 92u - 2u),
-			m_loopStartL(loopStart * 2u + m_sampleStartL), m_loopStartR(numChannels == 1u ? 0u : loopStart * 2u + m_sampleStartR), m_loopEndL(loopEnd * 2u + m_sampleStartL - 2u), m_loopEndR(numChannels == 1u ? 0u : loopEnd * 2u + m_sampleStartR - 2u) {}
+			: m_sampleStartR(numChannels == 1u ? m_sampleStartL : numSamples + 92u), m_sampleEndL(numSamples + 92u - 2u),
+			m_sampleEndR(numChannels == 1u ? m_sampleEndL : numSamples * sizeof(int16_t) + 92u - 2u),
+			m_loopStartL(loopStart * sizeof(int16_t) + m_sampleStartL), m_loopStartR(numChannels == 1u ? m_loopStartL : loopStart * sizeof(int16_t) + m_sampleStartR),
+			m_loopEndL(loopEnd * sizeof(int16_t) + m_sampleStartL - 2u), m_loopEndR(numChannels == 1u ? m_loopEndL : loopEnd * sizeof(int16_t) + m_sampleStartR - 2u) {}
 		
 		void Read(std::ifstream& stream)
 		{
@@ -1260,16 +1267,31 @@ namespace simple_e4b
 			sampleChunk.writeType(&m_loopEndL);
 			sampleChunk.writeType(&m_loopEndR);
 		}
-		
+
+		[[nodiscard]] uint32_t GetLoopStartL() const { return (m_loopStartL - 92u) / sizeof(int16_t); }
+		[[nodiscard]] uint32_t GetLoopStartR() const { return (m_loopStartR - m_sampleStartR) / sizeof(int16_t); }
+		[[nodiscard]] uint32_t GetLoopEndL() const { return (m_loopEndL - 92u + 2u) / sizeof(int16_t); }
+		[[nodiscard]] uint32_t GetLoopEndR() const { return (m_loopEndR - m_sampleStartR + 2u) / sizeof(int16_t); }
+		[[nodiscard]] uint32_t GetSampleStartL() const { return (m_sampleStartL - 92u) / sizeof(int16_t); }
+		[[nodiscard]] uint32_t GetSampleStartR() const { return (m_sampleStartR - 92u) / sizeof(int16_t); }
+		[[nodiscard]] uint32_t GetSampleEndL() const { return (m_sampleEndL - 92u + 2u) / sizeof(int16_t); }
+		[[nodiscard]] uint32_t GetSampleEndR() const { return (m_sampleEndR - 92u + 2u) / sizeof(int16_t); }
+
+	private:
 		uint32_t m_unknown = 0u;
 		uint32_t m_sampleStartL = 92u;
-		uint32_t m_sampleStartR = 0u; // = 0 if mono
-		uint32_t m_sampleEndL = 0u; // = sample size - 2 + 92
-		uint32_t m_sampleEndR = 0u; // = sample size - 2
-		uint32_t m_loopStartL = 0u; // multiplied by 2 and adding 92
-		uint32_t m_loopStartR = 0u; // = loopStart - 92
-		uint32_t m_loopEndL = 0u; // multiplied by 2 and adding 92
-		uint32_t m_loopEndR = 0u; // = loopEnd - 92
+		uint32_t m_sampleStartR = 92u;
+		uint32_t m_sampleEndL = 0u;
+		uint32_t m_sampleEndR = 0u;
+		uint32_t m_loopStartL = 0u;
+		uint32_t m_loopStartR = 0u;
+		uint32_t m_loopEndL = 0u;
+		uint32_t m_loopEndR = 0u;
+	};
+
+	enum struct ESampleType final
+	{
+		LEFT, MONO, RIGHT
 	};
 
 	struct E3Sample final
@@ -1287,10 +1309,11 @@ namespace simple_e4b
 		
 		E3Sample() = default;
 		
-		explicit E3Sample(std::string&& sampleName, std::vector<int16_t>&& sampleData, const uint32_t sampleRate,
-			const uint32_t numChannels, const SampleLoopInfo& loopInfo, const uint16_t index = std::numeric_limits<uint16_t>::max())
-			: m_index(index), m_name(std::move(sampleName)), m_loopInfo(loopInfo), m_sampleRate(sampleRate),
-			m_numChannels(numChannels), m_sampleData(std::move(sampleData)) {}
+		explicit E3Sample(std::string&& sampleName, std::vector<int16_t>&& sampleData, const uint32_t sampleRate, const uint32_t numChannels,
+			const SampleLoopInfo& loopInfo, const uint16_t index = std::numeric_limits<uint16_t>::max()) : m_index(index),
+			m_name(std::move(sampleName)), m_loopInfo(loopInfo), m_sampleRate(sampleRate), m_numChannels(numChannels),
+			m_sampleData(std::move(sampleData)), m_params(static_cast<uint32_t>(m_sampleData.size()) * numChannels,
+				numChannels, loopInfo.m_loopStart, loopInfo.m_loopEnd) {}
 
 		void Write(FORMChunk& sampleChunk) const
 		{
@@ -1310,15 +1333,12 @@ namespace simple_e4b
 				return;
 			}
 			
-			const uint16_t index(std::byteswap(m_index));
+			const uint16_t index(byteswap_helpers::byteswap_uint16(m_index));
 			sampleChunk.writeType(reinterpret_cast<const char*>(&index), sizeof(uint16_t));
 			
 			sampleChunk.writeType(m_name.data(), EOS_E4_MAX_NAME_LEN);
-
-			const E3SampleParams params(static_cast<uint32_t>(m_numChannels == 1u ? m_sampleData.size() * 2 : m_sampleData.size()),
-				m_numChannels, m_loopInfo.m_loopStart, m_loopInfo.m_loopEnd);
 			
-			params.Write(sampleChunk);
+			m_params.Write(sampleChunk);
 			
 			sampleChunk.writeType(&m_sampleRate);
 
@@ -1335,14 +1355,13 @@ namespace simple_e4b
 		void Read(std::ifstream& stream, const size_t subChunkSize)
 		{
 			stream.read(reinterpret_cast<char*>(&m_index), sizeof(uint16_t));
-			m_index = std::byteswap(m_index);
+			m_index = byteswap_helpers::byteswap_uint16(m_index);
 
 			m_name.clear();
 			m_name.resize(EOS_E4_MAX_NAME_LEN);
 			stream.read(m_name.data(), EOS_E4_MAX_NAME_LEN);
-
-			E3SampleParams params;
-			params.Read(stream);
+			
+			m_params.Read(stream);
 
 			stream.read(reinterpret_cast<char*>(&m_sampleRate), sizeof(uint32_t));
 
@@ -1351,12 +1370,12 @@ namespace simple_e4b
 
 			m_numChannels = E3SampleHelpers::GetNumChannels(format);
 			m_loopInfo = SampleLoopInfo(E3SampleHelpers::IsLooping(format), E3SampleHelpers::IsLoopingInRelease(format),
-				(params.m_loopStartL - 92u) / 2u, (params.m_loopEndL + 2u - 92u) / 2u);
+				m_params.GetLoopStartL(), m_params.GetLoopEndL());
 			
 			stream.read(reinterpret_cast<char*>(m_extraParams.data()), sizeof(uint32_t) * EOS_NUM_EXTRA_SAMPLE_PARAMETERS);
 
 			constexpr size_t SAMPLE_INFO_WITHOUT_SIZE(sizeof(uint16_t) + EOS_E4_MAX_NAME_LEN +
-				sizeof(E3SampleParams) + sizeof(uint32_t) + sizeof(uint32_t) + (sizeof(uint32_t) * EOS_NUM_EXTRA_SAMPLE_PARAMETERS));
+				sizeof(E3SampleParams) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) * EOS_NUM_EXTRA_SAMPLE_PARAMETERS);
 
 			m_sampleData.clear();
 			m_sampleData.resize((subChunkSize - SAMPLE_INFO_WITHOUT_SIZE) / sizeof(int16_t));
@@ -1366,13 +1385,32 @@ namespace simple_e4b
 		uint16_t m_index = std::numeric_limits<uint16_t>::max(); // requires byteswap
 		mutable std::string m_name;
 
+		[[nodiscard]] const SampleLoopInfo& GetLoopInfo() const { return m_loopInfo; }
+		[[nodiscard]] uint32_t GetNumChannels() const { return m_numChannels; }
+		[[nodiscard]] uint32_t GetSampleRate() const { return m_sampleRate; }
+
+		[[nodiscard]] std::vector<int16_t> GetSampleData(const ESampleType type) const
+		{
+			if(type == ESampleType::RIGHT && m_numChannels == 2u)
+			{
+				return std::vector<int16_t>{m_sampleData.begin() + m_params.GetSampleStartR(),
+					m_sampleData.end() - (static_cast<uint32_t>(m_sampleData.size()) - m_params.GetSampleEndR())};
+			}
+			
+			return std::vector<int16_t>{m_sampleData.begin(), m_sampleData.end() - (static_cast<uint32_t>(m_sampleData.size()) - m_params.GetSampleEndL())};
+		}
+
+	private:
+		std::array<uint32_t, EOS_NUM_EXTRA_SAMPLE_PARAMETERS> m_extraParams{}; // Always seems to be empty
+
 		SampleLoopInfo m_loopInfo;
     
 		uint32_t m_sampleRate = 0u; // [7000, 192000]
 		uint32_t m_numChannels = 0u; // [1, 2]
-
-		std::array<uint32_t, EOS_NUM_EXTRA_SAMPLE_PARAMETERS> m_extraParams{}; // Always seems to be empty
+		
 		std::vector<int16_t> m_sampleData{};
+		
+		E3SampleParams m_params;
 	};
 
 	/*
@@ -1402,7 +1440,7 @@ namespace simple_e4b
 				return;
 			}
 			
-			const uint16_t index(std::byteswap(m_index));
+			const uint16_t index(byteswap_helpers::byteswap_uint16(m_index));
 			sampleChunk.writeType(reinterpret_cast<const char*>(&index), sizeof(uint16_t));
 			
 			sampleChunk.writeType(m_name.data(), EOS_E4_MAX_NAME_LEN);
@@ -1413,7 +1451,7 @@ namespace simple_e4b
 		void Read(std::ifstream& stream, const size_t subChunkSize)
 		{
 			stream.read(reinterpret_cast<char*>(&m_index), sizeof(uint16_t));
-			m_index = std::byteswap(m_index);
+			m_index = byteswap_helpers::byteswap_uint16(m_index);
 
 			m_name.clear();
 			m_name.resize(EOS_E4_MAX_NAME_LEN);
@@ -1492,7 +1530,7 @@ namespace simple_e4b
 			stream.ignore(4);
 			
 			stream.read(reinterpret_cast<char*>(&m_currentPreset), sizeof(uint16_t));
-			m_currentPreset = std::byteswap(m_currentPreset);
+			m_currentPreset = byteswap_helpers::byteswap_uint16(m_currentPreset);
 			
 			stream.read(reinterpret_cast<char*>(&m_midiChannels), static_cast<std::streamsize>(sizeof(E4MIDIChannel) * m_midiChannels.size()));
 			
