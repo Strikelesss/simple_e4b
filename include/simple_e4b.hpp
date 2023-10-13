@@ -263,7 +263,7 @@ namespace simple_e4b
 					std::array<char, 4> E4B0{};
 					stream.read(E4B0.data(), static_cast<std::streamsize>(E4B0.size()));
 
-					if (std::string_view{E4B0} == "E4B0")
+					if (std::string_view{E4B0.data(), E4B0.size()} == "E4B0")
 					{
 						FORMChunk TOC;
 						TOC.Read(stream);
@@ -285,7 +285,7 @@ namespace simple_e4b
 
 									uint32_t subchunkPos(0u);
 									stream.read(reinterpret_cast<char*>(&subchunkPos), sizeof(uint32_t));
-									subchunkPos = std::byteswap(subchunkPos);
+									subchunkPos = byteswap_helpers::byteswap_uint32(subchunkPos);
 
 									// Skip to the actual data location:
 									stream.seekg(subchunkPos + static_cast<uint32_t>(FORM_CHUNK_MAX_NAME_LEN + sizeof(uint32_t)));
@@ -382,10 +382,10 @@ namespace simple_e4b
 				FORMChunk TOCSubchunk(std::string(subChunk.GetName()), subChunk.GetFullSize(false) - 2u);
 
 				// Get the offset including this TOC subchunk:
-				const uint32_t chunkLoc(std::byteswap(FORM.GetFullSize(true) + EOS_E4_TOC_SIZE));
+				const uint32_t chunkLoc(byteswap_helpers::byteswap_uint32(FORM.GetFullSize(true) + EOS_E4_TOC_SIZE));
 				TOCSubchunk.writeType(&chunkLoc, sizeof(uint32_t));
 
-				index = std::byteswap(index);
+				index = byteswap_helpers::byteswap_uint16(index);
 				TOCSubchunk.writeType(&index, sizeof(uint16_t));
 
 				TOCSubchunk.writeType(name.c_str(), name.length());
