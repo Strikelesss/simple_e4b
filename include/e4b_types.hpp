@@ -3,27 +3,55 @@
 #include <cassert>
 #include <string_view>
 #include <fstream>
-#include "include/byteswap_helpers.h"
+
+namespace byteswap_helpers
+{
+	[[nodiscard]] constexpr unsigned short byteswap_uint16(const unsigned short val) noexcept
+	{
+		return static_cast<unsigned short>((val << 8) | (val >> 8));
+	}
+
+	[[nodiscard]] constexpr unsigned long byteswap_uint32(const unsigned long val) noexcept
+	{
+		return (val << 24) | ((val << 8) & 0x00FF'0000) | ((val >> 8) & 0x0000'FF00) | (val >> 24);
+	}
+}
 
 namespace simple_e4b
 {
 	constexpr std::array<std::string_view, 12> MIDI_NOTATION{"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
 	constexpr int8_t MIDI_OCTAVE_MIN = -2i8;
 	constexpr int8_t MIDI_OCTAVE_MAX = 8i8;
+	constexpr int8_t MIN_TRANSPOSE_BYTE = -36i8;
+	constexpr int8_t MAX_TRANSPOSE_BYTE = 36i8;
+	constexpr int8_t MIN_COARSE_TUNE_BYTE = -72i8;
+	constexpr int8_t MAX_COARSE_TUNE_BYTE = 24i8;
+	constexpr int8_t MIN_VOLUME_BYTE = -96i8;
+	constexpr int8_t MAX_VOLUME_BYTE = 10i8;
+	constexpr int8_t MIN_PAN_BYTE = -64i8;
+	constexpr int8_t MAX_PAN_BYTE = 63i8;
+	constexpr uint8_t MIN_LFO_LAG_BYTE = 0i8;
+	constexpr uint8_t MAX_LFO_LAG_BYTE = 10i8;
+	constexpr uint8_t MIN_ZONE_DATA_BYTE = 0i8;
+	constexpr uint8_t MAX_ZONE_DATA_BYTE = 127i8;
+	constexpr uint16_t MIN_FILTER_FREQUENCY = 57i16;
+	constexpr uint16_t MAX_FILTER_FREQUENCY = 20000i16;
 	
 	constexpr uint32_t EOS_E4_TOC_SIZE = 32u;
 	constexpr size_t EOS_E4_MAX_PRESETS = 1000;
+	constexpr size_t EOS_E4_MAX_VOICES = std::numeric_limits<uint16_t>::max();
 	constexpr size_t EOS_E4_MAX_SAMPLES = 1000;
 	constexpr size_t EOS_E4_MAX_SEQUENCES = 1000;
+	constexpr size_t EOS_E4_MAX_ZONES = 256;
 	constexpr size_t FORM_CHUNK_MAX_NAME_LEN = 4;
 	constexpr size_t EOS_E4_MAX_NAME_LEN = 16;
 	constexpr size_t EOS_NUM_EXTRA_SAMPLE_PARAMETERS = 8;
-	constexpr uint8_t EOS_E4_INITIAL_MIDI_CONTROLLER_OFF = 255ui8;
+	constexpr uint8_t EOS_E4_INITIAL_MIDI_CONTROLLER_OFF = std::numeric_limits<uint8_t>::max();
 
 	inline void ApplyEOSNamingStandards(std::string& str)
 	{
 		assert(!str.empty());
-		if(!str.empty())
+		if(!str.empty() && str.length() != EOS_E4_MAX_NAME_LEN)
 		{
 			str.resize(EOS_E4_MAX_NAME_LEN);
 			std::replace(str.begin(), str.end(), '\0', ' ');
@@ -125,7 +153,7 @@ namespace simple_e4b
 
 		std::vector<FORMChunk> m_subChunks{};
 
-	protected:
+	private:
 		std::string m_chunkName;
 		uint32_t m_readChunkSize = 0u;
 
@@ -137,7 +165,7 @@ namespace simple_e4b
 	 * Voices:
 	 */
 
-	namespace E4VoiceHelpers
+	namespace unit_helpers
 	{
 		constexpr double MAX_FREQUENCY_20000 = 9.90348755253612804;
 		constexpr double MIN_FREQUENCY_57 = 4.04305126783455015;
@@ -242,18 +270,32 @@ namespace simple_e4b
 		explicit MidiNote(const uint8_t byte) : m_notation(MIDI_NOTATION[byte % 12]), m_octave(static_cast<int8_t>(static_cast<int>(byte) / 12 - 2)) {}
 		
 		explicit MidiNote(const std::string_view notation, const int8_t octave)
-			: m_notation(notation), m_octave(std::clamp(octave, MIDI_OCTAVE_MIN, MIDI_OCTAVE_MAX)) {}
+			: m_octave(std::clamp(octave, MIDI_OCTAVE_MIN, MIDI_OCTAVE_MAX))
+		{
+			SetNotation(notation);
+		}
 
 		[[nodiscard]] uint8_t ToByte() const
 		{
-			m_octave = std::clamp(m_octave, MIDI_OCTAVE_MIN, MIDI_OCTAVE_MAX);
-			
 			const int notationPos(static_cast<int>(std::distance(MIDI_NOTATION.begin(), std::find(MIDI_NOTATION.begin(), MIDI_NOTATION.end(), m_notation))));
 			return static_cast<uint8_t>(std::clamp(12 + notationPos + (m_octave + 1) * 12, 0, 127));	
 		}
-		
+
+		void SetNotation(const std::string_view notation)
+		{
+			const bool isValidNotation(std::find(MIDI_NOTATION.begin(), MIDI_NOTATION.end(), notation) != MIDI_NOTATION.end());
+			assert(isValidNotation);
+			if(isValidNotation) { m_notation = notation; }
+		}
+
+		void SetOctave(const int8_t octave)
+		{
+			m_octave = std::clamp(octave, MIDI_OCTAVE_MIN, MIDI_OCTAVE_MAX);
+		}
+
+	private:
 		std::string_view m_notation;
-		mutable int8_t m_octave = 0i8;
+		int8_t m_octave = 0i8;
 	};
 
 	struct E4SampleZoneNoteData final
@@ -264,7 +306,18 @@ namespace simple_e4b
 
 		explicit E4SampleZoneNoteData(const uint8_t low, const uint8_t lowFade, const uint8_t highFade, const uint8_t high)
 			: m_low(low), m_lowFade(lowFade), m_highFade(highFade), m_high(high) {}
+
+		void SetLow(const uint8_t val) { m_low = std::clamp(val, MIN_ZONE_DATA_BYTE, MAX_ZONE_DATA_BYTE); }
+		void SetHigh(const uint8_t val) { m_high = std::clamp(val, MIN_ZONE_DATA_BYTE, MAX_ZONE_DATA_BYTE); }
+		void SetLowFade(const uint8_t val) { m_lowFade = std::clamp(val, MIN_ZONE_DATA_BYTE, MAX_ZONE_DATA_BYTE); }
+		void SetHighFade(const uint8_t val) { m_highFade = std::clamp(val, MIN_ZONE_DATA_BYTE, MAX_ZONE_DATA_BYTE); }
+
+		[[nodiscard]] uint8_t GetLow() const { return m_low; }
+		[[nodiscard]] uint8_t GetHigh() const { return m_high; }
+		[[nodiscard]] uint8_t GetLowFade() const { return m_lowFade; }
+		[[nodiscard]] uint8_t GetHighFade() const { return m_highFade; }
 		
+	private:
 		uint8_t m_low = 0ui8; // [0, 127]
 		uint8_t m_lowFade = 0ui8; // [0, 127]
 		uint8_t m_highFade = 0ui8; // [0, 127] 
@@ -276,7 +329,7 @@ namespace simple_e4b
 		E4SampleZone() = default;
 		
 		explicit E4SampleZone(const uint16_t sampleIndex, const MidiNote& originalKey)
-			: m_sampleIndex(byteswap_helpers::byteswap_uint16(sampleIndex)), m_originalKey(originalKey) {}
+			: m_sampleIndex(sampleIndex), m_originalKey(originalKey) {}
 
 		void Write(FORMChunk& presetChunk) const
 		{
@@ -289,7 +342,7 @@ namespace simple_e4b
 			const char* null(nullptr);
 			presetChunk.writeType(null, 1);
 
-			const int8_t fineTune(E4VoiceHelpers::ConvertFineTuneToByte(m_fineTune));
+			const int8_t fineTune(unit_helpers::ConvertFineTuneToByte(m_fineTune));
 			presetChunk.writeType(reinterpret_cast<const char*>(&fineTune), sizeof(int8_t));
 			
 			const uint8_t originalKey(m_originalKey.ToByte());
@@ -314,7 +367,7 @@ namespace simple_e4b
 			int8_t fineTune;
 			stream.read(reinterpret_cast<char*>(&fineTune), sizeof(int8_t));
 
-			m_fineTune = E4VoiceHelpers::ConvertByteToFineTune(fineTune);
+			m_fineTune = unit_helpers::ConvertByteToFineTune(fineTune);
 
 			uint8_t originalKey;
 			stream.read(reinterpret_cast<char*>(&originalKey), sizeof(uint8_t));
@@ -326,7 +379,28 @@ namespace simple_e4b
 
 			stream.ignore(7);
 		}
+
+		void SetSampleIndex(const uint16_t index) { m_sampleIndex = index; }
+		void SetFineTune(const double fineTune) { m_fineTune = std::clamp(fineTune, -100.0, 100.0); }
+		void SetVolume(const int8_t dB) { m_volume = std::clamp(dB, MIN_VOLUME_BYTE, MAX_VOLUME_BYTE); }
+		void SetPan(const int8_t pan) { m_pan = std::clamp(pan, MIN_PAN_BYTE, MAX_PAN_BYTE); }
+
+		/**
+		 * \brief 
+		 * \return Volume in dB
+		 */
+		[[nodiscard]] int8_t GetVolume() const { return m_volume; }
 		
+		[[nodiscard]] E4SampleZoneNoteData& GetKeyData() { return m_keyData; }
+		[[nodiscard]] E4SampleZoneNoteData& GetVelData() { return m_velData; }
+		[[nodiscard]] const E4SampleZoneNoteData& GetKeyData() const { return m_keyData; }
+		[[nodiscard]] const E4SampleZoneNoteData& GetVelData() const { return m_velData; }
+		[[nodiscard]] uint16_t GetSampleIndex() const { return m_sampleIndex; }
+		[[nodiscard]] double GetFineTune() const { return m_fineTune; }
+		[[nodiscard]] const MidiNote& GetOriginalKey() const { return m_originalKey; }
+		[[nodiscard]] int8_t GetPan() const { return m_pan; }
+
+	private:
 		E4SampleZoneNoteData m_keyData;
 		E4SampleZoneNoteData m_velData;
 
@@ -363,23 +437,11 @@ namespace simple_e4b
 
 	enum struct E4LFOShape final : uint8_t
 	{
-		TRIANGLE = 0ui8,
-		SINE = 1ui8,
-		SAWTOOTH = 2ui8,
-		SQUARE = 3ui8,
-		PULSE_33 = 4ui8,
-		PULSE_25 = 5ui8,
-		PULSE_16 = 6ui8,
-		PULSE_12 = 7ui8,
-		OCTAVES = 8ui8,
-		FIFTH_PLUS_OCTAVE = 9ui8,
-		SUS4_TRIP = 10ui8,
-		NEENER = 11ui8,
-		SINE_1_2 = 12ui8,
-		SINE_1_3_5 = 13ui8,
-		SINE_NOISE = 14ui8,
-		HEMI_QUAVER = 15ui8,
-		RANDOM = 255ui8
+		TRIANGLE = 0ui8, SINE = 1ui8, SAWTOOTH = 2ui8, SQUARE = 3ui8,
+		PULSE_33 = 4ui8, PULSE_25 = 5ui8, PULSE_16 = 6ui8, PULSE_12 = 7ui8,
+		OCTAVES = 8ui8, FIFTH_PLUS_OCTAVE = 9ui8, SUS4_TRIP = 10ui8,
+		NEENER = 11ui8, SINE_1_2 = 12ui8, SINE_1_3_5 = 13ui8, SINE_NOISE = 14ui8,
+		HEMI_QUAVER = 15ui8, RANDOM = 255ui8
 	};
 
 	struct E4LFO final
@@ -387,19 +449,19 @@ namespace simple_e4b
 		E4LFO() = default;
 
 		explicit E4LFO(const double rate, const E4LFOShape shape, const double delay, const float variation, const bool keySync)
-			: m_rate(rate), m_shape(shape), m_delay(delay), m_variation(variation), m_keySync(keySync) {}
+			: m_rate(rate), m_shape(shape), m_delay(delay), m_variationPercent(variation), m_keySync(keySync) {}
 
 		void Write(FORMChunk& presetChunk) const
 		{
-			const uint8_t rate(E4VoiceHelpers::GetByteFromLFORate(std::clamp(m_rate, 0.08, 18.01)));
+			const uint8_t rate(unit_helpers::GetByteFromLFORate(std::clamp(m_rate, 0.08, 18.01)));
 			presetChunk.writeType(reinterpret_cast<const char*>(&rate), sizeof(uint8_t));
 			
 			presetChunk.writeType(reinterpret_cast<const char*>(&m_shape), sizeof(E4LFOShape));
 
-			const uint8_t delay(E4VoiceHelpers::GetByteFromLFODelay(std::clamp(m_delay, 0.0, 21.694)));
+			const uint8_t delay(unit_helpers::GetByteFromLFODelay(std::clamp(m_delay, 0.0, 21.694)));
 			presetChunk.writeType(reinterpret_cast<const char*>(&delay), sizeof(uint8_t));
 
-			const uint8_t variation(E4VoiceHelpers::ConvertPercentToByteF(std::clamp(m_variation, 0.f, 100.f)));
+			const uint8_t variation(unit_helpers::ConvertPercentToByteF(std::clamp(m_variationPercent, 0.f, 100.f)));
 			presetChunk.writeType(reinterpret_cast<const char*>(&variation), sizeof(uint8_t));
 
 			const bool keySync(!m_keySync);
@@ -414,19 +476,19 @@ namespace simple_e4b
 			uint8_t rate;
 			stream.read(reinterpret_cast<char*>(&rate), sizeof(uint8_t));
 
-			m_rate = E4VoiceHelpers::GetLFORateFromByte(rate);
+			m_rate = unit_helpers::GetLFORateFromByte(rate);
 			
 			stream.read(reinterpret_cast<char*>(&m_shape), sizeof(E4LFOShape));
 
 			uint8_t delay;
 			stream.read(reinterpret_cast<char*>(&delay), sizeof(uint8_t));
 
-			m_delay = E4VoiceHelpers::GetLFODelayFromByte(delay);
+			m_delay = unit_helpers::GetLFODelayFromByte(delay);
 
 			uint8_t variation;
 			stream.read(reinterpret_cast<char*>(&variation), sizeof(uint8_t));
 
-			m_variation = E4VoiceHelpers::ConvertByteToPercentF(variation);
+			m_variationPercent = unit_helpers::ConvertByteToPercentF(variation);
 			
 			stream.read(reinterpret_cast<char*>(&m_keySync), sizeof(bool));
 
@@ -435,239 +497,126 @@ namespace simple_e4b
 
 			stream.ignore(2);
 		}
+
+		void SetRate(const double hertz)
+		{
+			m_rate = std::clamp(hertz, 0.08, 18.01);
+		}
+
+		void SetDelay(const double delaySec)
+		{
+			m_delay = std::clamp(delaySec, 0.0, 21.694);
+		}
+
+		void SetVariationPercent(const float variationPercent)
+		{
+			m_variationPercent = std::clamp(variationPercent, 0.f, 100.f);
+		}
+
+		void SetShape(const E4LFOShape shape) { m_shape = shape; }
+		void SetKeySync(const bool arg) { m_keySync = arg; }
+
+		[[nodiscard]] E4LFOShape GetShape() const { return m_shape; }
+		[[nodiscard]] bool IsKeySync() const { return m_keySync; }
+
+		/**
+		 * \return Rate in hertz
+		 */
+		[[nodiscard]] double GetRate() const { return m_rate; }
 		
+		/**
+		 * \return Delay in seconds
+		 */
+		[[nodiscard]] double GetDelay() const { return m_delay; }
+		
+		/**
+		 * \return Variation percentage
+		 */
+		[[nodiscard]] float GetVariation() const { return m_variationPercent; }
+		
+	private:
 		double m_rate = 0.08;
 		E4LFOShape m_shape = E4LFOShape::TRIANGLE;
 		double m_delay = 0.0;
-		float m_variation = 0.f;
+		float m_variationPercent = 0.f;
 		bool m_keySync = false;
 	};
 	
 	enum struct EEOSCordSource final : uint8_t
 	{
-		SRC_OFF = 0ui8,
-		XFADE_RANDOM = 4ui8,
-		KEY_POLARITY_POS = 8ui8,
-		KEY_POLARITY_CENTER = 9ui8,
-		VEL_POLARITY_POS = 10ui8,
-		VEL_POLARITY_CENTER = 11ui8,
-		VEL_POLARITY_LESS = 12ui8,
-		RELEASE_VEL = 13ui8,
-		GATE = 14ui8,
-		PITCH_WHEEL = 16ui8,
-		MOD_WHEEL = 17ui8,
-		PRESSURE = 18ui8,
-		PEDAL = 19ui8,
-		MIDI_A = 20ui8,
-		MIDI_B = 21ui8,
-		FOOTSWITCH_1 = 22ui8,
-		FOOTSWITCH_2 = 23ui8,
-		FOOTSWITCH_1_FF = 24ui8,
-		FOOTSWITCH_2_FF = 25ui8,
-		MIDI_VOLUME = 26ui8,
-		MIDI_PAN = 27ui8,
-		EXPRESSION = 28ui8,
-		MIDI_C = 32ui8,
-		MIDI_D = 33ui8,
-		MIDI_E = 34ui8,
-		MIDI_F = 35ui8,
-		MIDI_G = 36ui8,
-		MIDI_H = 37ui8,
-		T_SWITCH = 38ui8,
-		T_SWITCH_FF = 39ui8,
-		MIDI_I = 40ui8,
-		MIDI_J = 41ui8,
-		MIDI_K = 42ui8,
-		MIDI_L = 43ui8,
-		MIDI_M = 44ui8,
-		MIDI_N = 45ui8,
-		MIDI_O = 46ui8,
-		MIDI_P = 47ui8,
-		KEY_GLIDE = 48ui8,
-		KEY_CC_WIN = 49ui8,
-		AMP_ENV_POLARITY_POS = 72ui8,
-		AMP_ENV_POLARITY_CENTER = 73ui8,
-		AMP_ENV_POLARITY_LESS = 74ui8,
-		FILTER_ENV_POLARITY_POS = 80ui8,
-		FILTER_ENV_POLARITY_CENTER = 81ui8,
-		FILTER_ENV_POLARITY_LESS = 82ui8,
-		AUX_ENV_POLARITY_POS = 88ui8,
-		AUX_ENV_POLARITY_CENTER = 89ui8,
-		AUX_ENV_POLARITY_LESS = 90ui8,
-		LFO1_POLARITY_CENTER = 96ui8,
-		LFO1_POLARITY_POS = 97ui8,
-		WHITE_NOISE = 98ui8,
-		PINK_NOISE = 99ui8,
-		KEY_RANDOM_1 = 100ui8,
-		KEY_RANDOM_2 = 101ui8,
-		LFO2_POLARITY_CENTER = 104ui8,
-		LFO2_POLARITY_POS = 105ui8,
-		LAG_1_IN = 106ui8,
-		LAG_1 = 107ui8,
-		LAG_2_IN = 108ui8,
-		LAG_2 = 109ui8,
-		CHANNEL_LAG_1 = 128ui8,
-		CHANNEL_RAMP = 129ui8,
-		CHANNEL_LAG_2 = 130ui8,
-		POLY_KEY_TIMER = 131ui8,
-		CLK_2X_WHOLE_NOTE = 144ui8,
-		CLK_WHOLE_NOTE = 145ui8,
-		CLK_HALF_NOTE = 146ui8,
-		CLK_QUARTER_NOTE = 147ui8,
-		CLK_8TH_NOTE = 148ui8,
-		CLK_16TH_NOTE = 149ui8,
-		CLK_4X_WHOLE_NOTE = 150ui8,
-		CLK_8X_WHOLE_NOTE = 151ui8,
-		DC_OFFSET = 160ui8,
-		SUMMING_AMP = 161ui8,
-		SWITCH = 162ui8,
-		ABSOLUTE_VALUE = 163ui8,
-		DIODE = 164ui8,
-		FLIP_FLOP = 165ui8,
-		QUANTIZER = 166ui8,
-		GAIN_4X = 167ui8,
-		FUNC_GEN_1_POS = 208ui8,
-		FUNC_GEN_1_CENTER = 209ui8,
-		FUNC_GEN_1_LESS = 210ui8,
-		FUNC_GEN_1_TRIGGER = 211ui8,
-		FUNC_GEN_1_GATE = 212ui8,
-		FUNC_GEN_2_POS = 213ui8,
-		FUNC_GEN_2_CENTER = 214ui8,
-		FUNC_GEN_2_LESS = 215ui8,
-		FUNC_GEN_2_TRIGGER = 216ui8,
-		FUNC_GEN_2_GATE = 217ui8,
-		FUNC_GEN_3_POS = 218ui8,
-		FUNC_GEN_3_CENTER = 219ui8,
-		FUNC_GEN_3_LESS = 220ui8,
-		FUNC_GEN_3_TRIGGER = 221ui8,
-		FUNC_GEN_3_GATE = 222ui8
+		SRC_OFF = 0ui8, XFADE_RANDOM = 4ui8, KEY_POLARITY_POS = 8ui8, KEY_POLARITY_CENTER = 9ui8,
+		VEL_POLARITY_POS = 10ui8, VEL_POLARITY_CENTER = 11ui8, VEL_POLARITY_LESS = 12ui8, RELEASE_VEL = 13ui8,
+		GATE = 14ui8, PITCH_WHEEL = 16ui8, MOD_WHEEL = 17ui8, PRESSURE = 18ui8, PEDAL = 19ui8,
+		MIDI_A = 20ui8, MIDI_B = 21ui8, FOOTSWITCH_1 = 22ui8, FOOTSWITCH_2 = 23ui8,
+		FOOTSWITCH_1_FF = 24ui8, FOOTSWITCH_2_FF = 25ui8, MIDI_VOLUME = 26ui8, MIDI_PAN = 27ui8,
+		EXPRESSION = 28ui8, MIDI_C = 32ui8, MIDI_D = 33ui8, MIDI_E = 34ui8, MIDI_F = 35ui8,
+		MIDI_G = 36ui8, MIDI_H = 37ui8, T_SWITCH = 38ui8, T_SWITCH_FF = 39ui8, MIDI_I = 40ui8,
+		MIDI_J = 41ui8, MIDI_K = 42ui8, MIDI_L = 43ui8, MIDI_M = 44ui8, MIDI_N = 45ui8,
+		MIDI_O = 46ui8, MIDI_P = 47ui8, KEY_GLIDE = 48ui8, KEY_CC_WIN = 49ui8,
+		AMP_ENV_POLARITY_POS = 72ui8, AMP_ENV_POLARITY_CENTER = 73ui8, AMP_ENV_POLARITY_LESS = 74ui8,
+		FILTER_ENV_POLARITY_POS = 80ui8, FILTER_ENV_POLARITY_CENTER = 81ui8, FILTER_ENV_POLARITY_LESS = 82ui8,
+		AUX_ENV_POLARITY_POS = 88ui8, AUX_ENV_POLARITY_CENTER = 89ui8, AUX_ENV_POLARITY_LESS = 90ui8,
+		LFO1_POLARITY_CENTER = 96ui8, LFO1_POLARITY_POS = 97ui8, WHITE_NOISE = 98ui8, PINK_NOISE = 99ui8,
+		KEY_RANDOM_1 = 100ui8, KEY_RANDOM_2 = 101ui8, LFO2_POLARITY_CENTER = 104ui8, LFO2_POLARITY_POS = 105ui8,
+		LAG_1_IN = 106ui8, LAG_1 = 107ui8, LAG_2_IN = 108ui8, LAG_2 = 109ui8,
+		CHANNEL_LAG_1 = 128ui8, CHANNEL_RAMP = 129ui8, CHANNEL_LAG_2 = 130ui8, POLY_KEY_TIMER = 131ui8,
+		CLK_2X_WHOLE_NOTE = 144ui8, CLK_WHOLE_NOTE = 145ui8, CLK_HALF_NOTE = 146ui8, CLK_QUARTER_NOTE = 147ui8,
+		CLK_8TH_NOTE = 148ui8, CLK_16TH_NOTE = 149ui8, CLK_4X_WHOLE_NOTE = 150ui8, CLK_8X_WHOLE_NOTE = 151ui8,
+		DC_OFFSET = 160ui8, SUMMING_AMP = 161ui8, SWITCH = 162ui8, ABSOLUTE_VALUE = 163ui8, DIODE = 164ui8,
+		FLIP_FLOP = 165ui8, QUANTIZER = 166ui8, GAIN_4X = 167ui8, FUNC_GEN_1_POS = 208ui8, FUNC_GEN_1_CENTER = 209ui8,
+		FUNC_GEN_1_LESS = 210ui8, FUNC_GEN_1_TRIGGER = 211ui8, FUNC_GEN_1_GATE = 212ui8,
+		FUNC_GEN_2_POS = 213ui8, FUNC_GEN_2_CENTER = 214ui8, FUNC_GEN_2_LESS = 215ui8, FUNC_GEN_2_TRIGGER = 216ui8,
+		FUNC_GEN_2_GATE = 217ui8, FUNC_GEN_3_POS = 218ui8, FUNC_GEN_3_CENTER = 219ui8, FUNC_GEN_3_LESS = 220ui8,
+		FUNC_GEN_3_TRIGGER = 221ui8, FUNC_GEN_3_GATE = 222ui8
 	};
 
 	enum struct EEOSCordDest final : uint8_t
 	{
-		DST_OFF = 0ui8,
-		KEY_SUSTAIN = 8ui8,
-		LOOP_SELECT_CONT = 16ui8,
-		LOOP_SELECT_JUMP = 17ui8,
-		FINE_PITCH = 47ui8,
-		PITCH = 48ui8,
-		GLIDE_RATE = 49ui8,
-		CHORUS_AMT = 50ui8,
-		CHORUS_INITIAL = 51ui8,
-		SAMPLE_START = 52ui8,
-		SAMPLE_LOOP = 53ui8,
-		SAMPLE_RETRIGGER_NEG = 54ui8,
-		OSC_SPEED = 55ui8,
-		FILTER_FREQ = 56ui8,
-		FILTER_RES = 57ui8,
-		REALTIME_RES = 58ui8,
-		SAMPLE_RETRIGGER_POS = 59ui8,
-		AMP_VOLUME = 64ui8,
-		AMP_PAN = 65ui8,
-		AMP_CROSSFADE = 66ui8,
-		SEND_MAIN = 68ui8,
-		SEND_AUX_1 = 69ui8,
-		SEND_AUX_2 = 70ui8,
-		SEND_AUX_3 = 71ui8,
-		AMP_ENV_RATES = 72ui8,
-		AMP_ENV_ATTACK = 73ui8,
-		AMP_ENV_DECAY = 74ui8,
-		AMP_ENV_RELEASE = 75ui8,
-		AMP_ENV_SUSTAIN = 76ui8,
-		FILTER_ENV_RATES = 80ui8,
-		FILTER_ENV_ATTACK = 81ui8,
-		FILTER_ENV_DECAY = 82ui8,
-		FILTER_ENV_RELEASE = 83ui8,
-		FILTER_ENV_SUSTAIN = 84ui8,
-		FILTER_ENV_TRIGGER = 86ui8,
-		AUX_ENV_RATES = 88ui8,
-		AUX_ENV_ATTACK = 89ui8,
-		AUX_ENV_DECAY = 90ui8,
-		AUX_ENV_RELEASE = 91ui8,
-		AUX_ENV_SUSTAIN = 92ui8,
-		AUX_ENV_TRIGGER = 94ui8,
-		LFO_1_FREQ = 96ui8,
-		LFO_1_TRIG = 97ui8,
-		LFO_2_FREQ = 104ui8,
-		LFO_2_TRIG = 105ui8,
-		LAG_1_IN = 106ui8,
-		LAG_2_IN = 108ui8,
-		LAG_1_RATE = 109ui8,
-		LAG_2_RATE = 110ui8,
-		FUNC_GEN_1_RATE = 112ui8,
-		FUNC_GEN_1_RETRIGGER = 113ui8,
-		FUNC_GEN_1_LENGTH = 114ui8,
-		FUNC_GEN_1_DIRECTION = 115ui8,
-		FUNC_GEN_2_RATE = 117ui8,
-		FUNC_GEN_2_RETRIGGER = 118ui8,
-		FUNC_GEN_2_LENGTH = 119ui8,
-		FUNC_GEN_2_DIRECTION = 120ui8,
-		FUNC_GEN_3_RATE = 122ui8,
-		FUNC_GEN_3_RETRIGGER = 123ui8,
-		FUNC_GEN_3_LENGTH = 124ui8,
-		FUNC_GEN_3_DIRECTION = 125ui8,
-		KEY_TIMER_RATE = 132ui8,
-		WET_DRY_MIX = 144ui8,
-		SUMMING_AMP = 161ui8,
-		SWITCH = 162ui8,
-		ABSOLUTE_VALUE = 163ui8,
-		DIODE = 164ui8,
-		QUANTIZER = 165ui8,
-		FLIP_FLOP = 166ui8,
-		GAIN_4X = 167ui8,
-		CORD_1_AMT = 168ui8,
-		CORD_2_AMT = 169ui8,
-		CORD_3_AMT = 170ui8,
-		CORD_4_AMT = 171ui8,
-		CORD_5_AMT = 172ui8,
-		CORD_6_AMT = 173ui8,
-		CORD_7_AMT = 174ui8,
-		CORD_8_AMT = 175ui8,
-		CORD_9_AMT = 176ui8,
-		CORD_10_AMT = 177ui8,
-		CORD_11_AMT = 178ui8,
-		CORD_12_AMT = 179ui8,
-		CORD_13_AMT = 180ui8,
-		CORD_14_AMT = 181ui8,
-		CORD_15_AMT = 182ui8,
-		CORD_16_AMT = 183ui8,
-		CORD_17_AMT = 184ui8,
-		CORD_18_AMT = 185ui8,
-		CORD_19_AMT = 186ui8,
-		CORD_20_AMT = 187ui8,
-		CORD_21_AMT = 188ui8,
-		CORD_22_AMT = 189ui8,
-		CORD_23_AMT = 190ui8,
-		CORD_24_AMT = 191ui8,
-		CORD_25_AMT = 192ui8,
-		CORD_26_AMT = 193ui8,
-		CORD_27_AMT = 194ui8,
-		CORD_28_AMT = 195ui8,
-		CORD_29_AMT = 196ui8,
-		CORD_30_AMT = 197ui8,
-		CORD_31_AMT = 198ui8,
-		CORD_32_AMT = 199ui8,
-		CORD_33_AMT = 200ui8,
-		CORD_34_AMT = 201ui8,
-		CORD_35_AMT = 202ui8,
-		CORD_36_AMT = 203ui8,
+		DST_OFF = 0ui8, KEY_SUSTAIN = 8ui8, LOOP_SELECT_CONT = 16ui8, LOOP_SELECT_JUMP = 17ui8,
+		FINE_PITCH = 47ui8, PITCH = 48ui8, GLIDE_RATE = 49ui8, CHORUS_AMT = 50ui8,
+		CHORUS_INITIAL = 51ui8, SAMPLE_START = 52ui8, SAMPLE_LOOP = 53ui8, SAMPLE_RETRIGGER_NEG = 54ui8,
+		OSC_SPEED = 55ui8, FILTER_FREQ = 56ui8, FILTER_RES = 57ui8, REALTIME_RES = 58ui8,
+		SAMPLE_RETRIGGER_POS = 59ui8, AMP_VOLUME = 64ui8, AMP_PAN = 65ui8, AMP_CROSSFADE = 66ui8,
+		SEND_MAIN = 68ui8, SEND_AUX_1 = 69ui8, SEND_AUX_2 = 70ui8, SEND_AUX_3 = 71ui8,
+		AMP_ENV_RATES = 72ui8, AMP_ENV_ATTACK = 73ui8, AMP_ENV_DECAY = 74ui8, AMP_ENV_RELEASE = 75ui8,
+		AMP_ENV_SUSTAIN = 76ui8, FILTER_ENV_RATES = 80ui8, FILTER_ENV_ATTACK = 81ui8, FILTER_ENV_DECAY = 82ui8,
+		FILTER_ENV_RELEASE = 83ui8, FILTER_ENV_SUSTAIN = 84ui8, FILTER_ENV_TRIGGER = 86ui8,
+		AUX_ENV_RATES = 88ui8, AUX_ENV_ATTACK = 89ui8, AUX_ENV_DECAY = 90ui8, AUX_ENV_RELEASE = 91ui8,
+		AUX_ENV_SUSTAIN = 92ui8, AUX_ENV_TRIGGER = 94ui8, LFO_1_FREQ = 96ui8, LFO_1_TRIG = 97ui8,
+		LFO_2_FREQ = 104ui8, LFO_2_TRIG = 105ui8, LAG_1_IN = 106ui8, LAG_2_IN = 108ui8,
+		LAG_1_RATE = 109ui8, LAG_2_RATE = 110ui8, FUNC_GEN_1_RATE = 112ui8, FUNC_GEN_1_RETRIGGER = 113ui8,
+		FUNC_GEN_1_LENGTH = 114ui8, FUNC_GEN_1_DIRECTION = 115ui8, FUNC_GEN_2_RATE = 117ui8,
+		FUNC_GEN_2_RETRIGGER = 118ui8, FUNC_GEN_2_LENGTH = 119ui8, FUNC_GEN_2_DIRECTION = 120ui8,
+		FUNC_GEN_3_RATE = 122ui8, FUNC_GEN_3_RETRIGGER = 123ui8, FUNC_GEN_3_LENGTH = 124ui8,
+		FUNC_GEN_3_DIRECTION = 125ui8, KEY_TIMER_RATE = 132ui8, WET_DRY_MIX = 144ui8, SUMMING_AMP = 161ui8,
+		SWITCH = 162ui8, ABSOLUTE_VALUE = 163ui8, DIODE = 164ui8, QUANTIZER = 165ui8, FLIP_FLOP = 166ui8,
+		GAIN_4X = 167ui8, CORD_1_AMT = 168ui8, CORD_2_AMT = 169ui8, CORD_3_AMT = 170ui8, CORD_4_AMT = 171ui8,
+		CORD_5_AMT = 172ui8, CORD_6_AMT = 173ui8, CORD_7_AMT = 174ui8, CORD_8_AMT = 175ui8,
+		CORD_9_AMT = 176ui8, CORD_10_AMT = 177ui8, CORD_11_AMT = 178ui8, CORD_12_AMT = 179ui8,
+		CORD_13_AMT = 180ui8, CORD_14_AMT = 181ui8, CORD_15_AMT = 182ui8, CORD_16_AMT = 183ui8,
+		CORD_17_AMT = 184ui8, CORD_18_AMT = 185ui8, CORD_19_AMT = 186ui8, CORD_20_AMT = 187ui8,
+		CORD_21_AMT = 188ui8, CORD_22_AMT = 189ui8, CORD_23_AMT = 190ui8, CORD_24_AMT = 191ui8,
+		CORD_25_AMT = 192ui8, CORD_26_AMT = 193ui8, CORD_27_AMT = 194ui8, CORD_28_AMT = 195ui8,
+		CORD_29_AMT = 196ui8, CORD_30_AMT = 197ui8, CORD_31_AMT = 198ui8, CORD_32_AMT = 199ui8,
+		CORD_33_AMT = 200ui8, CORD_34_AMT = 201ui8, CORD_35_AMT = 202ui8, CORD_36_AMT = 203ui8
 	};
 
 	struct E4Cord final
 	{
 		E4Cord() = default;
 		
-		explicit E4Cord(const EEOSCordSource src, const EEOSCordDest dst, const float amt) : m_src(src), m_dst(dst), m_amt(amt) {}
+		explicit E4Cord(const EEOSCordSource src, const EEOSCordDest dst, const float amt) : m_src(src), m_dst(dst), m_percent(amt) {}
 
 		void Write(FORMChunk& presetChunk) const
 		{
 			presetChunk.writeType(reinterpret_cast<const char*>(&m_src), sizeof(EEOSCordSource));
 			presetChunk.writeType(reinterpret_cast<const char*>(&m_dst), sizeof(EEOSCordDest));
 
-			const int8_t amt(E4VoiceHelpers::ConvertPercentToByteF(std::clamp(m_amt, -100.f, 100.f)));
+			const int8_t amt(unit_helpers::ConvertPercentToByteF(std::clamp(m_percent, -100.f, 100.f)));
 			presetChunk.writeType(reinterpret_cast<const char*>(&amt), sizeof(int8_t));
-			
-			presetChunk.writeType(reinterpret_cast<const char*>(&m_unknown), sizeof(uint8_t));
+
+			constexpr uint8_t unknown(0ui8);
+			presetChunk.writeType(reinterpret_cast<const char*>(&unknown), sizeof(uint8_t));
 		}
 		
 		void Read(std::ifstream& stream)
@@ -678,73 +627,42 @@ namespace simple_e4b
 			int8_t amt;
 			stream.read(reinterpret_cast<char*>(&amt), sizeof(int8_t));
 
-			m_amt = E4VoiceHelpers::ConvertByteToPercentF(amt);
+			m_percent = unit_helpers::ConvertByteToPercentF(amt);
 			
-			stream.read(reinterpret_cast<char*>(&m_unknown), sizeof(uint8_t));
+			stream.ignore(1);
 		}
-		
+
+		void SetSrc(const EEOSCordSource src) { m_src = src; }
+		void SetDst(const EEOSCordDest dst) { m_dst = dst; }
+		void SetPercent(const float percent) { m_percent = std::clamp(percent, -100.f, 100.f); }
+
+		[[nodiscard]] EEOSCordSource GetSrc() const { return m_src; }
+		[[nodiscard]] EEOSCordDest GetDst() const { return m_dst; }
+		[[nodiscard]] float GetPercent() const { return m_percent; }
+
+	private:
 		EEOSCordSource m_src = EEOSCordSource::SRC_OFF;
 		EEOSCordDest m_dst = EEOSCordDest::DST_OFF;
-		float m_amt = 0.f;
-		uint8_t m_unknown = 0ui8;
+		float m_percent = 0.f;
 	};
 	
 	enum struct EEOSFilterType final : uint8_t
 	{
-		TWO_POLE_LOWPASS = 1ui8,
-		FOUR_POLE_LOWPASS = 0ui8,
-		SIX_POLE_LOWPASS = 2ui8,
-		TWO_POLE_HIGHPASS = 8ui8,
-		FOUR_POLE_HIGHPASS = 9ui8,
-		CONTRARY_BANDPASS = 18ui8,
-		SWEPT_EQ_1_OCTAVE = 32ui8,
-		SWEPT_EQ_2_1_OCTAVE = 33ui8,
-		SWEPT_EQ_3_1_OCTAVE = 34ui8,
-		PHASER_1 = 64ui8,
-		PHASER_2 = 65ui8,
-		BAT_PHASER = 66ui8,
-		FLANGER_LITE = 72ui8,
-		VOCAL_AH_AY_EE = 80ui8,
-		VOCAL_OO_AH = 81ui8,
-		DUAL_EQ_MORPH = 96ui8,
-		DUAL_EQ_LP_MORPH = 97ui8,
-		DUAL_EQ_MORPH_EXPRESSION = 98ui8,
-		PEAK_SHELF_MORPH = 104ui8,
-		MORPH_DESIGNER = 108ui8,
-		NO_FILTER = 127ui8,
-		ACE_OF_BASS = 131ui8,
-		MEGASWEEPZ = 132ui8,
-		EARLY_RIZER = 133ui8,
-		MILLENNIUM = 134ui8,
-		MEATY_GIZMO = 135ui8,
-		KLUB_KLASSIK = 136ui8,
-		BASSBOX_303 = 137ui8,
-		FUZZI_FACE = 138ui8,
-		DEAD_RINGER = 139ui8,
-		TB_OR_NOT_TB = 140ui8,
-		OOH_TO_EEE = 141ui8,
-		BOLAND_BASS = 142ui8,
-		MULTI_Q_VOX = 143ui8,
-		TALKING_HEDZ = 144ui8,
-		ZOOM_PEAKS = 145ui8,
-		DJ_ALKALINE = 146ui8,
-		BASS_TRACER = 147ui8,
-		ROGUE_HERTZ = 148ui8,
-		RAZOR_BLADES = 149ui8,
-		RADIO_CRAZE = 150ui8,
-		EEH_TO_AAH = 151ui8,
-		UBU_ORATOR = 152ui8,
-		DEEP_BOUCHE = 153ui8,
-		FREAK_SHIFTA = 154ui8,
-		CRUZ_PUSHER = 155ui8,
-		ANGELZ_HAIRZ = 156ui8,
-		DREAM_WEAVA = 157ui8,
-		ACID_RAVAGE = 158ui8,
-		BASS_O_MATIC = 159ui8,
-		LUCIFERS_Q = 160ui8,
-		TOOTH_COMB = 161ui8,
-		EAR_BENDER = 162ui8,
-		KLANG_KLING = 163ui8
+		TWO_POLE_LOWPASS = 1ui8, FOUR_POLE_LOWPASS = 0ui8, SIX_POLE_LOWPASS = 2ui8,
+		TWO_POLE_HIGHPASS = 8ui8, FOUR_POLE_HIGHPASS = 9ui8, CONTRARY_BANDPASS = 18ui8,
+		SWEPT_EQ_1_OCTAVE = 32ui8, SWEPT_EQ_2_1_OCTAVE = 33ui8, SWEPT_EQ_3_1_OCTAVE = 34ui8,
+		PHASER_1 = 64ui8, PHASER_2 = 65ui8, BAT_PHASER = 66ui8, FLANGER_LITE = 72ui8,
+		VOCAL_AH_AY_EE = 80ui8, VOCAL_OO_AH = 81ui8, DUAL_EQ_MORPH = 96ui8,
+		DUAL_EQ_LP_MORPH = 97ui8, DUAL_EQ_MORPH_EXPRESSION = 98ui8, PEAK_SHELF_MORPH = 104ui8,
+		MORPH_DESIGNER = 108ui8, NO_FILTER = 127ui8, ACE_OF_BASS = 131ui8, MEGASWEEPZ = 132ui8,
+		EARLY_RIZER = 133ui8, MILLENNIUM = 134ui8, MEATY_GIZMO = 135ui8, KLUB_KLASSIK = 136ui8,
+		BASSBOX_303 = 137ui8, FUZZI_FACE = 138ui8, DEAD_RINGER = 139ui8, TB_OR_NOT_TB = 140ui8,
+		OOH_TO_EEE = 141ui8, BOLAND_BASS = 142ui8, MULTI_Q_VOX = 143ui8, TALKING_HEDZ = 144ui8,
+		ZOOM_PEAKS = 145ui8, DJ_ALKALINE = 146ui8, BASS_TRACER = 147ui8, ROGUE_HERTZ = 148ui8,
+		RAZOR_BLADES = 149ui8, RADIO_CRAZE = 150ui8, EEH_TO_AAH = 151ui8, UBU_ORATOR = 152ui8,
+		DEEP_BOUCHE = 153ui8, FREAK_SHIFTA = 154ui8, CRUZ_PUSHER = 155ui8, ANGELZ_HAIRZ = 156ui8,
+		DREAM_WEAVA = 157ui8, ACID_RAVAGE = 158ui8, BASS_O_MATIC = 159ui8, LUCIFERS_Q = 160ui8,
+		TOOTH_COMB = 161ui8, EAR_BENDER = 162ui8, KLANG_KLING = 163ui8
 	};
 
 	enum struct EEOSGlideCurveType final : uint8_t
@@ -807,13 +725,13 @@ namespace simple_e4b
 
 			presetChunk.writeType(null, 3);
 
-			const uint8_t sampleOffset(E4VoiceHelpers::ConvertPercentToByteF(std::clamp(m_sampleOffset, 0.f, 100.f)));
+			const uint8_t sampleOffset(unit_helpers::ConvertPercentToByteF(std::clamp(m_sampleOffset, 0.f, 100.f)));
 			presetChunk.writeType(reinterpret_cast<const char*>(&sampleOffset), sizeof(uint8_t));
 			
 			presetChunk.writeType(reinterpret_cast<const char*>(&m_transpose), sizeof(int8_t));
 			presetChunk.writeType(reinterpret_cast<const char*>(&m_coarseTune), sizeof(int8_t));
 
-			const int8_t fineTune(E4VoiceHelpers::ConvertFineTuneToByte(m_fineTune));
+			const int8_t fineTune(unit_helpers::ConvertFineTuneToByte(m_fineTune));
 			presetChunk.writeType(reinterpret_cast<const char*>(&fineTune), sizeof(int8_t));
 			
 			presetChunk.writeType(reinterpret_cast<const char*>(&m_glideRate), sizeof(uint8_t));
@@ -822,10 +740,10 @@ namespace simple_e4b
 
 			presetChunk.writeType(null, 1);
 
-			const uint8_t chorusWidth(E4VoiceHelpers::ConvertChorusWidthToByte(std::clamp(m_chorusWidth, 0.f, 100.f)));
+			const uint8_t chorusWidth(unit_helpers::ConvertChorusWidthToByte(std::clamp(m_chorusWidth, 0.f, 100.f)));
 			presetChunk.writeType(reinterpret_cast<const char*>(&chorusWidth), sizeof(uint8_t));
 
-			const uint8_t chorusAmount(E4VoiceHelpers::ConvertPercentToByteF(std::clamp(m_chorusAmount, 0.f, 100.f)));
+			const uint8_t chorusAmount(unit_helpers::ConvertPercentToByteF(std::clamp(m_chorusAmount, 0.f, 100.f)));
 			presetChunk.writeType(reinterpret_cast<const char*>(&chorusAmount), sizeof(uint8_t));
 
 			presetChunk.writeType(null, 7);
@@ -845,10 +763,10 @@ namespace simple_e4b
 			
 			presetChunk.writeType(null, 1);
 
-			const uint8_t filterFrequency(E4VoiceHelpers::ConvertFilterFrequencyToByte(std::clamp(m_filterFrequency, 57ui16, 20000ui16)));
+			const uint8_t filterFrequency(unit_helpers::ConvertFilterFrequencyToByte(std::clamp(m_filterFrequency, 57ui16, 20000ui16)));
 			presetChunk.writeType(reinterpret_cast<const char*>(&filterFrequency), sizeof(uint8_t));
 
-			const uint8_t filterResonance(E4VoiceHelpers::ConvertPercentToByteF(std::clamp(m_filterResonance, 0.f, 100.f)));
+			const uint8_t filterResonance(unit_helpers::ConvertPercentToByteF(std::clamp(m_filterResonance, 0.f, 100.f)));
 			presetChunk.writeType(reinterpret_cast<const char*>(&filterResonance), sizeof(uint8_t));
 
 			presetChunk.writeType(null, 48);
@@ -931,7 +849,7 @@ namespace simple_e4b
 			uint8_t sampleOffset;
 			stream.read(reinterpret_cast<char*>(&sampleOffset), sizeof(uint8_t));
 
-			m_sampleOffset = E4VoiceHelpers::ConvertByteToPercentF(sampleOffset);
+			m_sampleOffset = unit_helpers::ConvertByteToPercentF(sampleOffset);
 			
 			stream.read(reinterpret_cast<char*>(&m_transpose), sizeof(int8_t));
 			stream.read(reinterpret_cast<char*>(&m_coarseTune), sizeof(int8_t));
@@ -939,7 +857,7 @@ namespace simple_e4b
 			int8_t fineTune;
 			stream.read(reinterpret_cast<char*>(&fineTune), sizeof(int8_t));
 
-			m_fineTune = E4VoiceHelpers::ConvertByteToFineTune(fineTune);
+			m_fineTune = unit_helpers::ConvertByteToFineTune(fineTune);
 			
 			stream.read(reinterpret_cast<char*>(&m_glideRate), sizeof(uint8_t));
 			stream.read(reinterpret_cast<char*>(&m_fixedPitch), sizeof(bool));
@@ -950,12 +868,12 @@ namespace simple_e4b
 			uint8_t chorusWidth;
 			stream.read(reinterpret_cast<char*>(&chorusWidth), sizeof(uint8_t));
 
-			m_chorusWidth = E4VoiceHelpers::GetChorusWidthPercent(chorusWidth);
+			m_chorusWidth = unit_helpers::GetChorusWidthPercent(chorusWidth);
 
 			uint8_t chorusAmt;
 			stream.read(reinterpret_cast<char*>(&chorusAmt), sizeof(uint8_t));
 
-			m_chorusAmount = E4VoiceHelpers::round_f_places(E4VoiceHelpers::ConvertByteToPercentF(chorusAmt), 2u);
+			m_chorusAmount = unit_helpers::round_f_places(unit_helpers::ConvertByteToPercentF(chorusAmt), 2u);
 
 			stream.ignore(1);
 
@@ -981,12 +899,12 @@ namespace simple_e4b
 			uint8_t filterFreq;
 			stream.read(reinterpret_cast<char*>(&filterFreq), sizeof(uint8_t));
 
-			m_filterFrequency = E4VoiceHelpers::ConvertByteToFilterFrequency(filterFreq);
+			m_filterFrequency = unit_helpers::ConvertByteToFilterFrequency(filterFreq);
 			
 			uint8_t filterRes;
 			stream.read(reinterpret_cast<char*>(&filterRes), sizeof(uint8_t));
 
-			m_filterResonance = E4VoiceHelpers::round_f_places(E4VoiceHelpers::ConvertByteToPercentF(filterRes), 1u);
+			m_filterResonance = unit_helpers::round_f_places(unit_helpers::ConvertByteToPercentF(filterRes), 1u);
 
 			stream.ignore(48);
 
@@ -1021,7 +939,7 @@ namespace simple_e4b
 				cord.Read(stream);
 			}
 
-			for(uint16_t i(0); i < zoneCount; ++i)
+			for(uint8_t i(0ui8); i < zoneCount; ++i)
 			{
 				E4SampleZone zone;
 				zone.Read(stream);
@@ -1029,7 +947,168 @@ namespace simple_e4b
 				m_zones.emplace_back(std::move(zone));
 			}
 		}
+
+		[[nodiscard]] bool GetPercentFromCord(const EEOSCordSource src, const EEOSCordDest dst, float& outPercent) const
+		{
+			for(const auto& cord : m_cords)
+			{
+				if(cord.GetSrc() == src && cord.GetDst() == dst)
+				{
+					outPercent = cord.GetPercent();
+					return true;
+				}
+			}
+
+			return false;
+		}
+
+		[[nodiscard]] bool HasCord(const EEOSCordSource src) const
+		{
+			for(const auto& cord : m_cords) { if(cord.GetSrc() == src) { return true; } }
+			return false;
+		}
+
+		void ReplaceOrAddCord(const E4Cord& cord)
+		{
+			// Replace if existing
+			for(auto& existingCord : m_cords)
+			{
+				if(existingCord.GetSrc() == cord.GetSrc() && existingCord.GetDst() == cord.GetDst())
+				{
+					existingCord.SetPercent(cord.GetPercent());
+					return;
+				}
+			}
+
+			// Replace null cord
+			for(auto& existingCord : m_cords)
+			{
+				if(existingCord.GetSrc() == EEOSCordSource::SRC_OFF && existingCord.GetDst() == EEOSCordDest::DST_OFF)
+				{
+					existingCord = cord;
+					break;
+				}
+			}
+		}
+
+		void SetGroup(const uint8_t group) { m_group = std::clamp(group, 0ui8, 31ui8); }
+		void SetKeyData(const E4SampleZoneNoteData data) { m_keyData = data; }
 		
+		void SetVelData(const E4SampleZoneNoteData data) { m_velData = data; }
+		void SetRTData(const E4SampleZoneNoteData data) { m_rtData = data; }
+		void SetKeyAssignGroup(const EEOSAssignGroup group) { m_keyAssignGroup = group; }
+		void SetKeyDelay(const uint16_t milliseconds) { m_keyDelay = std::clamp(milliseconds, 0ui16, 10000ui16); }
+		void SetSampleOffset(const float offset) { m_sampleOffset = offset; }
+		void SetTranspose(const int8_t cents) { m_transpose = std::clamp(cents, MIN_TRANSPOSE_BYTE, MAX_TRANSPOSE_BYTE); }
+		void SetCoarseTune(const int8_t cents) { m_coarseTune = std::clamp(cents, MIN_COARSE_TUNE_BYTE, MAX_COARSE_TUNE_BYTE); }
+		void SetFineTune(const double fineTune) { m_fineTune = std::clamp(fineTune, -100.0, 100.0); }
+		void SetIsFixedPitch(const bool arg) { m_fixedPitch = arg; }
+		void SetKeyMode(const EEOSKeyMode mode) { m_keyMode = mode; }
+		void SetChorusWidth(const float percent) { m_chorusWidth = std::clamp(percent, 0.f, 100.f); }
+		void SetChorusAmount(const float percent) { m_chorusAmount = std::clamp(percent, 0.f, 100.f); }
+		void SetGlideCurveType(const EEOSGlideCurveType type) { m_glideCurveType = type; }
+		void SetVolume(const int8_t dB) { m_volume = std::clamp(dB, MIN_VOLUME_BYTE, MAX_VOLUME_BYTE); }
+		void SetPan(const int8_t pan) { m_pan = std::clamp(pan, MIN_PAN_BYTE, MAX_PAN_BYTE); }
+		void SetFilterType(const EEOSFilterType type) { m_filterType = type; }
+		void SetFilterFrequency(const uint16_t hertz) { m_filterFrequency = std::clamp(hertz, MIN_FILTER_FREQUENCY, MAX_FILTER_FREQUENCY); }
+		void SetFilterResonance(const float percent) { m_filterResonance = std::clamp(percent, 0.f, 100.f); }
+		void SetLFOLag1(const uint8_t lag) { m_lfoLag1 = std::clamp(lag, MIN_LFO_LAG_BYTE, MAX_LFO_LAG_BYTE); }
+		void SetLFOLag2(const uint8_t lag) { m_lfoLag2 = std::clamp(lag, MIN_LFO_LAG_BYTE, MAX_LFO_LAG_BYTE); }
+
+		void AddSampleZone(E4SampleZone&& zone)
+		{
+			assert(m_zones.size() < EOS_E4_MAX_ZONES);
+			if(m_zones.size() < EOS_E4_MAX_ZONES)
+			{
+				m_zones.emplace_back(std::move(zone));	
+			}
+		}
+
+		void RemoveSampleZone(const std::vector<E4SampleZone>::const_iterator& iter)
+		{
+			m_zones.erase(iter);
+		}
+
+		/**
+		 * \return Volume in dB
+		 */
+		[[nodiscard]] int8_t GetVolume() const { return m_volume; }
+
+		/**
+		 * \return Dynamic range in dB
+		 */
+		[[nodiscard]] int8_t GetAmpEnvDynRange() const { return m_ampEnvDynRange; }
+
+		/**
+		 * \return Filter frequency in hertz
+		 */
+		[[nodiscard]] uint16_t GetFilterFrequency() const { return m_filterFrequency; }
+		
+		/**
+		 * \return Resonance percentage
+		 */
+		[[nodiscard]] float GetFilterResonance() const { return m_filterResonance; }
+
+		/**
+		 * \return Delay in milliseconds
+		 */
+		[[nodiscard]] uint16_t GetKeyDelay() const { return m_keyDelay; }
+
+		/**
+		 * \return Chorus amount percentage
+		 */
+		[[nodiscard]] float GetChorusAmount() const { return m_chorusAmount; }
+
+		/**
+		 * \brief 
+		 * \return Chorus width percentage
+		 */
+		[[nodiscard]] float GetChorusWidth() const { return m_chorusWidth; }
+
+		/**
+		* \return Chorus Inter-Aural time delay in milliseconds
+		 */
+		[[nodiscard]] uint8_t GetChorusInitItd() const { return m_chorusInitItd; }
+
+		/**
+		 * \return Glide rate in seconds
+		 */
+		[[nodiscard]] uint8_t GetGlideRate() const { return m_glideRate; }
+		
+		[[nodiscard]] uint8_t GetGroup() const { return m_group; }
+		[[nodiscard]] E4SampleZoneNoteData& GetKeyData() { return m_keyData; }
+		[[nodiscard]] E4SampleZoneNoteData& GetVelData() { return m_velData; }
+		[[nodiscard]] E4SampleZoneNoteData& GetRTData() { return m_rtData; }
+		[[nodiscard]] const E4SampleZoneNoteData& GetKeyData() const { return m_keyData; }
+		[[nodiscard]] const E4SampleZoneNoteData& GetVelData() const { return m_velData; }
+		[[nodiscard]] const E4SampleZoneNoteData& GetRTData() const { return m_rtData; }
+		[[nodiscard]] EEOSAssignGroup GetKeyAssignGroup() const { return m_keyAssignGroup; }
+		[[nodiscard]] float GetSampleOffset() const { return m_sampleOffset; }
+		[[nodiscard]] int8_t GetTranspose() const { return m_transpose; }
+		[[nodiscard]] int8_t GetCoarseTune() const { return m_coarseTune; }
+		[[nodiscard]] double GetFineTune() const { return m_fineTune; }
+		[[nodiscard]] bool IsFixedPitch() const { return m_fixedPitch; }
+		[[nodiscard]] EEOSKeyMode GetKeyMode() const { return m_keyMode; }
+		[[nodiscard]] bool IsKeyLatch() const { return m_keyLatch; }
+		[[nodiscard]] EEOSGlideCurveType GetGlideCurveType() const { return m_glideCurveType; }
+		[[nodiscard]] int8_t GetPan() const { return m_pan; }
+		[[nodiscard]] EEOSFilterType GetFilterType() const { return m_filterType; }
+		[[nodiscard]] E4Envelope& GetAmpEnv() { return m_ampEnv; }
+		[[nodiscard]] E4Envelope& GetFilterEnv() { return m_filterEnv; }
+		[[nodiscard]] E4Envelope& GetAuxEnv() { return m_auxEnv; }
+		[[nodiscard]] const E4Envelope& GetAmpEnv() const { return m_ampEnv; }
+		[[nodiscard]] const E4Envelope& GetFilterEnv() const { return m_filterEnv; }
+		[[nodiscard]] const E4Envelope& GetAuxEnv() const { return m_auxEnv; }
+		[[nodiscard]] E4LFO& GetLFO1() { return m_lfo1; }
+		[[nodiscard]] E4LFO& GetLFO2() { return m_lfo2; }
+		[[nodiscard]] const E4LFO& GetLFO1() const { return m_lfo1; }
+		[[nodiscard]] const E4LFO& GetLFO2() const { return m_lfo2; }
+		[[nodiscard]] uint8_t GetLFOLag1() const { return m_lfoLag1; }
+		[[nodiscard]] uint8_t GetLFOLag2() const { return m_lfoLag2; }
+		[[nodiscard]] std::array<E4Cord, 24>& GetCords() { return m_cords; }
+		[[nodiscard]] const std::vector<E4SampleZone>& GetSampleZones() const { return m_zones; }
+		
+	private:
 		uint8_t m_group = 0ui8; // [0 (1), 31 (32)]
 		std::array<int8_t, 8> m_amplifierData{'\0', 100i8};
 
@@ -1066,15 +1145,15 @@ namespace simple_e4b
 		E4Envelope m_auxEnv{};
 
 		E4LFO m_lfo1 = E4LFO(5.79, E4LFOShape::SINE, 0.0, 0.f, true);
-		E4LFO m_lfo2 = E4LFO(0.08, E4LFOShape::TRIANGLE, 0.0, 0.f, false);
+		E4LFO m_lfo2 = E4LFO(5.79, E4LFOShape::SINE, 0.0, 0.f, true);
 		uint8_t m_lfoLag1 = 0ui8; // [0, 10]
 		uint8_t m_lfoLag2 = 0ui8; // [0, 10]
 
 		std::array<E4Cord, 24> m_cords = {
-			E4Cord(EEOSCordSource::VEL_POLARITY_LESS, EEOSCordDest::AMP_VOLUME, 0ui8), E4Cord(EEOSCordSource::PITCH_WHEEL, EEOSCordDest::PITCH, 0ui8),
-			E4Cord(EEOSCordSource::LFO1_POLARITY_CENTER, EEOSCordDest::PITCH, 0ui8), E4Cord(EEOSCordSource::MOD_WHEEL, EEOSCordDest::CORD_3_AMT, 7ui8),
-			E4Cord(EEOSCordSource::VEL_POLARITY_LESS, EEOSCordDest::FILTER_FREQ, 0ui8), E4Cord(EEOSCordSource::FILTER_ENV_POLARITY_POS, EEOSCordDest::FILTER_FREQ, 0ui8),
-			E4Cord(EEOSCordSource::KEY_POLARITY_CENTER, EEOSCordDest::FILTER_FREQ, 0ui8), E4Cord(EEOSCordSource::FOOTSWITCH_1, EEOSCordDest::KEY_SUSTAIN, 127ui8)
+			E4Cord(EEOSCordSource::VEL_POLARITY_LESS, EEOSCordDest::AMP_VOLUME, 0.f), E4Cord(EEOSCordSource::PITCH_WHEEL, EEOSCordDest::PITCH, 0.f),
+			E4Cord(EEOSCordSource::LFO1_POLARITY_CENTER, EEOSCordDest::PITCH, 0.f), E4Cord(EEOSCordSource::MOD_WHEEL, EEOSCordDest::CORD_3_AMT, 6.f),
+			E4Cord(EEOSCordSource::VEL_POLARITY_LESS, EEOSCordDest::FILTER_FREQ, 0.f), E4Cord(EEOSCordSource::FILTER_ENV_POLARITY_POS, EEOSCordDest::FILTER_FREQ, 0.f),
+			E4Cord(EEOSCordSource::KEY_POLARITY_CENTER, EEOSCordDest::FILTER_FREQ, 0.f), E4Cord(EEOSCordSource::FOOTSWITCH_1, EEOSCordDest::KEY_SUSTAIN, 100.f)
 		};
 
 		/*
@@ -1092,17 +1171,16 @@ namespace simple_e4b
 	{
 		E4Preset() = default;
 		
-		explicit E4Preset(std::string&& presetName, std::vector<E4Voice>&& voices, const uint16_t index = std::numeric_limits<uint16_t>::max())
-			: m_index(index), m_name(std::move(presetName)), m_voices(std::move(voices)) {}
+		explicit E4Preset(std::string&& presetName, std::vector<E4Voice>&& voices, const uint16_t index = std::numeric_limits<uint16_t>::max()) : m_voices(std::move(voices))
+		{
+			SetIndex(index);
+			
+			ApplyEOSNamingStandards(presetName);
+			m_name = std::move(presetName);
+		}
 		
 		void Write(FORMChunk& presetChunk) const
 		{
-			// Basic checks to ensure correctness
-			if(m_name.length() != EOS_E4_MAX_NAME_LEN)
-			{
-				ApplyEOSNamingStandards(m_name);
-			}
-			
 			const uint16_t index(byteswap_helpers::byteswap_uint16(m_index));
 			presetChunk.writeType(reinterpret_cast<const char*>(&index), sizeof(uint16_t));
 			
@@ -1179,8 +1257,54 @@ namespace simple_e4b
 			}
 		}
 
+		void AddVoice(E4Voice&& voice)
+		{
+			assert(m_voices.size() < EOS_E4_MAX_VOICES);
+			if(m_voices.size() < EOS_E4_MAX_VOICES)
+			{
+				m_voices.emplace_back(std::move(voice));	
+			}
+		}
+
+		void RemoveVoice(const std::vector<E4Voice>::const_iterator& iter)
+		{
+			m_voices.erase(iter);
+		}
+
+		void SetIndex(const uint16_t index)
+		{
+			// Max indicates that the index will be automatically assigned.
+			if(index == std::numeric_limits<uint16_t>::max()) { m_index = index; return; }
+			
+			m_index = std::clamp(index, 0ui16, static_cast<uint16_t>(EOS_E4_MAX_PRESETS));
+		}
+
+		void SetName(std::string&& name)
+		{
+			ApplyEOSNamingStandards(name);
+			m_name = std::move(name);
+		}
+
+		void SetTranspose(const int8_t cents) { m_transpose = std::clamp(cents, MIN_TRANSPOSE_BYTE, MAX_TRANSPOSE_BYTE); }
+		void SetVolume(const int8_t dB) { m_volume = std::clamp(dB, MIN_VOLUME_BYTE, MAX_VOLUME_BYTE); }
+
+		[[nodiscard]] uint16_t GetIndex() const { return m_index; }
+		[[nodiscard]] const std::string& GetName() const { return m_name; }
+		[[nodiscard]] const std::vector<E4Voice>& GetVoices() const { return m_voices; }
+		
+		/**
+		 * \return Transpose in cents
+		 */
+		[[nodiscard]] int8_t GetTranspose() const { return m_transpose; }
+		
+		/**
+		 * \return Volume in dB
+		 */
+		[[nodiscard]] int8_t GetVolume() const { return m_volume; }
+		
+	private:
 		uint16_t m_index = 0ui16; // requires byteswap
-		mutable std::string m_name;
+		std::string m_name;
 		int8_t m_transpose = 0i8; // [-12, 12]
 		int8_t m_volume = 0i8; // [-96, 10]
 		std::array<uint8_t, 4> m_initialMIDIControllers{EOS_E4_INITIAL_MIDI_CONTROLLER_OFF, EOS_E4_INITIAL_MIDI_CONTROLLER_OFF,
@@ -1237,10 +1361,12 @@ namespace simple_e4b
 		E3SampleParams() = default;
 
 		explicit E3SampleParams(const uint32_t numSamples, const uint32_t numChannels, const uint32_t loopStart, const uint32_t loopEnd)
-			: m_sampleStartR(numChannels == 1u ? m_sampleStartL : numSamples + 92u), m_sampleEndL(numSamples + 92u - 2u),
-			m_sampleEndR(numChannels == 1u ? m_sampleEndL : numSamples * sizeof(int16_t) + 92u - 2u),
-			m_loopStartL(loopStart * sizeof(int16_t) + m_sampleStartL), m_loopStartR(numChannels == 1u ? m_loopStartL : loopStart * sizeof(int16_t) + m_sampleStartR),
-			m_loopEndL(loopEnd * sizeof(int16_t) + m_sampleStartL - 2u), m_loopEndR(numChannels == 1u ? m_loopEndL : loopEnd * sizeof(int16_t) + m_sampleStartR - 2u) {}
+			: m_sampleStartR(numChannels == 1u ? m_sampleStartL : numSamples + 92u), m_sampleEndL(numChannels == 1u ? numSamples * sizeof(int16_t) + 92u - 2u : numSamples + 92u - 2u),
+			m_sampleEndR(numChannels == 1u ? m_sampleEndL : numSamples * sizeof(int16_t) + 92u - 2u)
+		{
+			SetLoopStart(loopStart, numSamples, numChannels);
+			SetLoopEnd(loopEnd, numSamples, numChannels);
+		}
 		
 		void Read(std::ifstream& stream)
 		{
@@ -1268,6 +1394,22 @@ namespace simple_e4b
 			sampleChunk.writeType(&m_loopEndR);
 		}
 
+		void SetLoopStart(uint32_t loopStart, const uint32_t numSamples, const uint32_t numChannels)
+		{
+			loopStart = std::clamp(loopStart, 0u, numSamples - 1u);
+			
+			m_loopStartL = loopStart * sizeof(int16_t) + m_sampleStartL;
+			m_loopStartR = numChannels == 1u ? m_loopStartL : loopStart * sizeof(int16_t) + m_sampleStartR;
+		}
+
+		void SetLoopEnd(uint32_t loopEnd, const uint32_t numSamples, const uint32_t numChannels)
+		{
+			loopEnd = std::clamp(loopEnd, 0u, numSamples);
+			
+			m_loopEndL = loopEnd * sizeof(int16_t) + m_sampleStartL - 2u;
+			m_loopEndR = numChannels == 1u ? m_loopEndL : loopEnd * sizeof(int16_t) + m_sampleStartR - 2u;
+		}
+
 		[[nodiscard]] uint32_t GetLoopStartL() const { return (m_loopStartL - 92u) / sizeof(int16_t); }
 		[[nodiscard]] uint32_t GetLoopStartR() const { return (m_loopStartR - m_sampleStartR) / sizeof(int16_t); }
 		[[nodiscard]] uint32_t GetLoopEndL() const { return (m_loopEndL - 92u + 2u) / sizeof(int16_t); }
@@ -1289,47 +1431,41 @@ namespace simple_e4b
 		uint32_t m_loopEndR = 0u;
 	};
 
-	enum struct ESampleType final
+	enum struct ESampleType final : uint8_t
 	{
-		LEFT, MONO, RIGHT
+		LEFT = 0ui8, MONO = 0ui8, RIGHT
 	};
 
+	struct SampleLoopInfo final
+	{
+		explicit SampleLoopInfo(const bool loop = false, const bool loopInRelease = false, const uint32_t loopStart = 0u, const uint32_t loopEnd = 0u)
+			: m_loop(loop), m_loopInRelease(loopInRelease), m_loopStart(loopStart), m_loopEnd(loopEnd) {}
+		
+		bool m_loop = false;
+		bool m_loopInRelease = false;
+		uint32_t m_loopStart = 0u;
+		uint32_t m_loopEnd = 0u;
+	};
+	
 	struct E3Sample final
 	{
-		struct SampleLoopInfo final
-		{
-			explicit SampleLoopInfo(const bool loop = false, const bool loopInRelease = false, const uint32_t loopStart = 0u, const uint32_t loopEnd = 0u)
-				: m_loop(loop), m_loopInRelease(loopInRelease), m_loopStart(loopStart), m_loopEnd(loopEnd) {}
-
-			bool m_loop = false;
-			bool m_loopInRelease = false;
-			uint32_t m_loopStart = 0u;
-			uint32_t m_loopEnd = 0u;
-		};
-		
 		E3Sample() = default;
 		
 		explicit E3Sample(std::string&& sampleName, std::vector<int16_t>&& sampleData, const uint32_t sampleRate, const uint32_t numChannels,
-			const SampleLoopInfo& loopInfo, const uint16_t index = std::numeric_limits<uint16_t>::max()) : m_index(index),
-			m_name(std::move(sampleName)), m_loopInfo(loopInfo), m_sampleRate(sampleRate), m_numChannels(numChannels),
-			m_sampleData(std::move(sampleData)), m_params(static_cast<uint32_t>(m_sampleData.size()) * numChannels,
-				numChannels, loopInfo.m_loopStart, loopInfo.m_loopEnd) {}
+			const SampleLoopInfo& loopInfo, const uint16_t index = std::numeric_limits<uint16_t>::max()) : m_loopInfo(loopInfo), m_sampleRate(std::clamp(sampleRate, 7000u, 192000u)),
+			m_numChannels(std::clamp(numChannels, 1u, 2u)), m_sampleData(std::move(sampleData)), m_params(static_cast<uint32_t>(m_sampleData.size()), numChannels, loopInfo.m_loopStart, loopInfo.m_loopEnd)
+		{
+			SetIndex(index);
+			
+			ApplyEOSNamingStandards(sampleName);
+			m_name = std::move(sampleName);
+		}
 
 		void Write(FORMChunk& sampleChunk) const
 		{
-			// Basic checks to ensure correctness:
-			
-			if(m_name.length() != EOS_E4_MAX_NAME_LEN)
-			{
-				ApplyEOSNamingStandards(m_name);
-			}
-
-			if(m_sampleData.empty() || (m_sampleRate < 7000u || m_sampleRate > 192000u) || (m_numChannels == 0u || m_numChannels > 2u) || m_index >= 1000ui16)
+			if(m_sampleData.empty())
 			{
 				assert(!m_sampleData.empty());
-				assert(m_sampleRate >= 7000u && m_sampleRate <= 192000u);
-				assert(m_numChannels == 1u || m_numChannels == 2u);
-				assert(m_index < 1000ui16);
 				return;
 			}
 			
@@ -1381,13 +1517,31 @@ namespace simple_e4b
 			m_sampleData.resize((subChunkSize - SAMPLE_INFO_WITHOUT_SIZE) / sizeof(int16_t));
 			stream.read(reinterpret_cast<char*>(m_sampleData.data()), static_cast<std::streamsize>(sizeof(int16_t) * m_sampleData.size()));
 		}
+		
+		void SetNumChannels(const uint32_t channels) { m_numChannels = std::clamp(channels, 1u, 2u); }
+		void SetSampleRate(const uint32_t sampleRate) { m_sampleRate = std::clamp(sampleRate, 7000u, 192000u); }
+		void SetSampleData(std::vector<int16_t>&& data) { m_sampleData = std::move(data); }
 
-		uint16_t m_index = std::numeric_limits<uint16_t>::max(); // requires byteswap
-		mutable std::string m_name;
+		void SetIndex(const uint16_t index)
+		{
+			// Max indicates that the index will be automatically assigned.
+			if(index == std::numeric_limits<uint16_t>::max()) { m_index = index; return; }
+			
+			m_index = std::clamp(index, 0ui16, static_cast<uint16_t>(EOS_E4_MAX_SAMPLES));
+		}
+		
+		void SetName(std::string&& name)
+		{
+			ApplyEOSNamingStandards(name);
+			m_name = std::move(name);
+		}
 
-		[[nodiscard]] const SampleLoopInfo& GetLoopInfo() const { return m_loopInfo; }
+		[[nodiscard]] uint16_t GetIndex() const { return m_index; }
 		[[nodiscard]] uint32_t GetNumChannels() const { return m_numChannels; }
 		[[nodiscard]] uint32_t GetSampleRate() const { return m_sampleRate; }
+		[[nodiscard]] const std::string& GetName() const { return m_name; }
+		[[nodiscard]] SampleLoopInfo& GetLoopInfo() { return m_loopInfo; }
+		[[nodiscard]] const SampleLoopInfo& GetLoopInfo() const { return m_loopInfo; }
 
 		[[nodiscard]] std::vector<int16_t> GetSampleData(const ESampleType type) const
 		{
@@ -1401,6 +1555,8 @@ namespace simple_e4b
 		}
 
 	private:
+		uint16_t m_index = std::numeric_limits<uint16_t>::max(); // requires byteswap
+		std::string m_name;
 		std::array<uint32_t, EOS_NUM_EXTRA_SAMPLE_PARAMETERS> m_extraParams{}; // Always seems to be empty
 
 		SampleLoopInfo m_loopInfo;
@@ -1421,22 +1577,19 @@ namespace simple_e4b
 	{
 		E4Sequence() = default;
 
-		explicit E4Sequence(std::string&& seqName, std::vector<char>&& midiData, const uint16_t index = std::numeric_limits<uint16_t>::max())
-			: m_index(index), m_name(std::move(seqName)), m_midiData(std::move(midiData)) {}
+		explicit E4Sequence(std::string&& seqName, std::vector<char>&& midiData, const uint16_t index = std::numeric_limits<uint16_t>::max()) : m_midiData(std::move(midiData))
+		{
+			SetIndex(index);
+			
+			ApplyEOSNamingStandards(seqName);
+			m_name = std::move(seqName);
+		}
 
 		void Write(FORMChunk& sampleChunk) const
 		{
-			// Basic checks to ensure correctness:
-			
-			if(m_name.length() != EOS_E4_MAX_NAME_LEN)
-			{
-				ApplyEOSNamingStandards(m_name);
-			}
-
-			if(m_midiData.empty() || m_index >= 1000ui16)
+			if(m_midiData.empty())
 			{
 				assert(!m_midiData.empty());
-				assert(m_index < 1000ui16);
 				return;
 			}
 			
@@ -1464,8 +1617,29 @@ namespace simple_e4b
 			stream.read(reinterpret_cast<char*>(m_midiData.data()), static_cast<std::streamsize>(m_midiData.size()));
 		}
 		
+		void SetMIDIData(std::vector<char>&& data) { m_midiData = std::move(data); }
+
+		void SetIndex(const uint16_t index)
+		{
+			// Max indicates that the index will be automatically assigned.
+			if(index == std::numeric_limits<uint16_t>::max()) { m_index = index; return; }
+			
+			m_index = std::clamp(index, 0ui16, static_cast<uint16_t>(EOS_E4_MAX_SEQUENCES));
+		}
+		
+		void SetName(std::string&& name)
+		{
+			ApplyEOSNamingStandards(name);
+			m_name = std::move(name);
+		}
+
+		[[nodiscard]] uint16_t GetIndex() const { return m_index; }
+		[[nodiscard]] const std::string& GetName() const { return m_name; }
+		[[nodiscard]] const std::vector<char>& GetMIDIData() const { return m_midiData; }
+		
+	private:
 		uint16_t m_index = std::numeric_limits<uint16_t>::max(); // requires byteswap
-		mutable std::string m_name;
+		std::string m_name;
 		std::vector<char> m_midiData{};
 	};
 
@@ -1490,18 +1664,14 @@ namespace simple_e4b
 	{
 		E4EMSt() = default;
 		
-		explicit E4EMSt(std::string&& emstName, const uint16_t currentPreset)
-			: m_name(std::move(emstName)), m_currentPreset(currentPreset) {}
+		explicit E4EMSt(std::string&& emstName, const uint16_t currentPreset) : m_currentPreset(currentPreset)
+		{
+			ApplyEOSNamingStandards(emstName);
+			m_name = std::move(emstName);
+		}
 
 		void Write(FORMChunk& emstChunk) const
 		{
-			// Basic checks to ensure correctness:
-			
-			if(m_name.length() != EOS_E4_MAX_NAME_LEN)
-			{
-				ApplyEOSNamingStandards(m_name);
-			}
-
 			const char* null(nullptr);
 			emstChunk.writeType(null, sizeof(uint16_t));
 			
@@ -1540,8 +1710,23 @@ namespace simple_e4b
 			
 			stream.ignore(312);
 		}
-		
-		mutable std::string m_name;
+
+		void SetCurrentPreset(const uint16_t presetIndex) { m_currentPreset = presetIndex; }
+		void SetTempo(const uint8_t tempo) { m_tempo = std::clamp(tempo, 20ui8, 240ui8); }
+
+		void SetName(std::string&& name)
+		{
+			ApplyEOSNamingStandards(name);
+			m_name = std::move(name);
+		}
+
+		[[nodiscard]] const std::string& GetName() const { return m_name; }
+		[[nodiscard]] uint16_t GetCurrentPreset() const { return m_currentPreset; }
+		[[nodiscard]] const std::array<E4MIDIChannel, 32>& GetMIDIChannels() const { return m_midiChannels; }
+		[[nodiscard]] uint8_t GetTempo() const { return m_tempo; }
+
+	private:
+		std::string m_name;
 		uint16_t m_currentPreset = 0ui16;
 		std::array<E4MIDIChannel, 32> m_midiChannels{};
 		uint8_t m_tempo = 20ui8; // [20, 240]

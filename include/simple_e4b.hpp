@@ -11,39 +11,21 @@ namespace simple_e4b
 
 		void AddPreset(E4Preset&& preset)
 		{
-			if(preset.m_name.length() != EOS_E4_MAX_NAME_LEN)
-			{
-				ApplyEOSNamingStandards(preset.m_name);
-			}
-
+			assert(m_presets.size() < EOS_E4_MAX_PRESETS);
+			if(m_presets.size() >= EOS_E4_MAX_PRESETS) { return; }
+			
 			for(const auto& existingPreset : m_presets)
 			{
-				if(existingPreset->m_index == preset.m_index)
+				if(existingPreset->GetIndex() == preset.GetIndex())
 				{
-					assert(existingPreset->m_index != preset.m_index);
+					assert(existingPreset->GetIndex() != preset.GetIndex());
 					return;
 				}
 			}
 
-			if(preset.m_index >= EOS_E4_MAX_PRESETS)
+			if(preset.GetIndex() == std::numeric_limits<uint16_t>::max())
 			{
-				if(preset.m_index == std::numeric_limits<uint16_t>::max())
-				{
-					assert(m_presets.size() < EOS_E4_MAX_PRESETS);
-					if(m_presets.size() < EOS_E4_MAX_PRESETS)
-					{
-						preset.m_index = static_cast<uint16_t>(m_presets.size());	
-					}
-					else
-					{
-						return;
-					}
-				}
-				else
-				{
-					assert(preset.m_index < EOS_E4_MAX_PRESETS);
-					return;
-				}
+				preset.SetIndex(static_cast<uint16_t>(m_presets.size()));	
 			}
 
 			m_presets.emplace_back(std::make_shared<E4Preset>(std::move(preset)));
@@ -56,39 +38,21 @@ namespace simple_e4b
 
 		void AddSequence(E4Sequence&& sequence)
 		{
-			if(sequence.m_name.length() != EOS_E4_MAX_NAME_LEN)
-			{
-				ApplyEOSNamingStandards(sequence.m_name);
-			}
-
+			assert(m_sequences.size() < EOS_E4_MAX_SEQUENCES);
+			if(m_sequences.size() >= EOS_E4_MAX_SEQUENCES) { return; }
+			
 			for(const auto& existingSequence : m_sequences)
 			{
-				if(existingSequence->m_index == sequence.m_index)
+				if(existingSequence->GetIndex() == sequence.GetIndex())
 				{
-					assert(existingSequence->m_index != sequence.m_index);
+					assert(existingSequence->GetIndex() != sequence.GetIndex());
 					return;
 				}
 			}
 
-			if(sequence.m_index >= EOS_E4_MAX_SEQUENCES)
+			if(sequence.GetIndex() == std::numeric_limits<uint16_t>::max())
 			{
-				if(sequence.m_index == std::numeric_limits<uint16_t>::max())
-				{
-					assert(m_sequences.size() < EOS_E4_MAX_SEQUENCES);
-					if(m_sequences.size() < EOS_E4_MAX_SEQUENCES)
-					{
-						sequence.m_index = static_cast<uint16_t>(m_sequences.size());	
-					}
-					else
-					{
-						return;
-					}
-				}
-				else
-				{
-					assert(sequence.m_index < EOS_E4_MAX_SEQUENCES);
-					return;
-				}
+				sequence.SetIndex(static_cast<uint16_t>(m_sequences.size()));	
 			}
 
 			m_sequences.emplace_back(std::make_shared<E4Sequence>(std::move(sequence)));
@@ -101,39 +65,21 @@ namespace simple_e4b
 		
 		void AddSample(E3Sample&& sample)
 		{
-			if(sample.m_name.length() != EOS_E4_MAX_NAME_LEN)
-			{
-				ApplyEOSNamingStandards(sample.m_name);
-			}
-
+			assert(m_samples.size() < EOS_E4_MAX_SAMPLES);
+			if(m_samples.size() >= EOS_E4_MAX_SAMPLES) { return; }
+			
 			for(const auto& existingSample : m_samples)
 			{
-				if(existingSample->m_index == sample.m_index)
+				if(existingSample->GetIndex() == sample.GetIndex())
 				{
-					assert(existingSample->m_index != sample.m_index);
+					assert(existingSample->GetIndex() != sample.GetIndex());
 					return;
 				}
 			}
 
-			if(sample.m_index >= EOS_E4_MAX_SAMPLES)
+			if(sample.GetIndex() == std::numeric_limits<uint16_t>::max())
 			{
-				if(sample.m_index == std::numeric_limits<uint16_t>::max())
-				{
-					assert(m_samples.size() < EOS_E4_MAX_SAMPLES);
-					if(m_samples.size() < EOS_E4_MAX_SAMPLES)
-					{
-						sample.m_index = static_cast<uint16_t>(m_samples.size());	
-					}
-					else
-					{
-						return;
-					}
-				}
-				else
-				{
-					assert(sample.m_index < EOS_E4_MAX_SAMPLES);
-					return;
-				}
+				sample.SetIndex(static_cast<uint16_t>(m_samples.size()));	
 			}
 
 			m_samples.emplace_back(std::make_shared<E3Sample>(std::move(sample)));
@@ -147,13 +93,10 @@ namespace simple_e4b
 		void SetStartupPreset(const uint16_t presetIndex)
 		{
 			assert(!m_presets.empty());
-			if(m_presets.empty())
-			{
-				return;
-			}
+			if(m_presets.empty()) { return; }
 			
 			// Startup preset is set to 'None', which is valid behavior.
-			if(presetIndex == 65535ui16)
+			if(presetIndex == std::numeric_limits<uint16_t>::max())
 			{
 				m_startupPreset = presetIndex;
 				return;
@@ -167,7 +110,7 @@ namespace simple_e4b
 			else
 			{
 				// Otherwise, set to the first valid index:
-				m_startupPreset = m_presets[0]->m_index;
+				m_startupPreset = m_presets[0]->GetIndex();
 			}
 		}
 
@@ -175,7 +118,7 @@ namespace simple_e4b
 		{
 			const auto& findResult(std::find_if(m_presets.begin(), m_presets.end(), [&](const auto& elem)
 			{
-				return elem->m_index == presetIndex;
+				return elem->GetIndex() == presetIndex;
 			}));
 
 			if(findResult != m_presets.end()) { return std::weak_ptr<E4Preset>(*findResult); }
@@ -186,7 +129,7 @@ namespace simple_e4b
 		{
 			const auto& findResult(std::find_if(m_samples.begin(), m_samples.end(), [&](const auto& elem)
 			{
-				return elem->m_index == sampleIndex;
+				return elem->GetIndex() == sampleIndex;
 			}));
 
 			if(findResult != m_samples.end()) { return std::weak_ptr<E3Sample>(*findResult); }
@@ -197,7 +140,7 @@ namespace simple_e4b
 		{
 			const auto& findResult(std::find_if(m_sequences.begin(), m_sequences.end(), [&](const auto& elem)
 			{
-				return elem->m_index == sequenceIndex;
+				return elem->GetIndex() == sequenceIndex;
 			}));
 
 			if(findResult != m_sequences.end()) { return std::weak_ptr<E4Sequence>(*findResult); }
@@ -216,7 +159,7 @@ namespace simple_e4b
 			bool isValidIndex(false);
 			for(const auto& element : vector)
 			{
-				if(element->m_index == index)
+				if(element->GetIndex() == index)
 				{
 					isValidIndex = true;
 					break;
@@ -245,10 +188,7 @@ namespace simple_e4b
 	{
 		const bool isEOSFileFormat(e4bFile.extension() == ".e4b" || e4bFile.extension() == ".E4B");
 		assert(isEOSFileFormat);
-		if(!isEOSFileFormat)
-		{
-			return EE4BReadResult::FILE_INVALID;
-		}
+		if(!isEOSFileFormat) { return EE4BReadResult::FILE_INVALID; }
 		
 		if (std::filesystem::exists(e4bFile))
 		{
@@ -339,7 +279,7 @@ namespace simple_e4b
 												E4EMSt startup;
 												startup.Read(stream);
 												
-												outBank.SetStartupPreset(startup.m_currentPreset);
+												outBank.SetStartupPreset(startup.GetCurrentPreset());
 											}
 										}
 									}
@@ -362,10 +302,7 @@ namespace simple_e4b
 	{
 		const bool isEOSFileFormat(e4bFile.extension() == ".e4b" || e4bFile.extension() == ".E4B");
 		assert(isEOSFileFormat);
-		if(!isEOSFileFormat)
-		{
-			return;
-		}
+		if(!isEOSFileFormat) { return; }
 		
 		std::ofstream stream(e4bFile.c_str(), std::ios::binary);
 		if (stream.is_open())
@@ -402,7 +339,7 @@ namespace simple_e4b
 				FORMChunk E4P1("E4P1");
 				preset->Write(E4P1);
 
-				AddTOCIndex(E4P1, preset->m_index, preset->m_name);
+				AddTOCIndex(E4P1, preset->GetIndex(), preset->GetName());
 				
 				FORM.m_subChunks.emplace_back(std::move(E4P1));
 			}
@@ -412,7 +349,7 @@ namespace simple_e4b
 				FORMChunk E3S1("E3S1");
 				sample->Write(E3S1);
 
-				AddTOCIndex(E3S1, sample->m_index, sample->m_name);
+				AddTOCIndex(E3S1, sample->GetIndex(), sample->GetName());
 				
 				FORM.m_subChunks.emplace_back(std::move(E3S1));
 			}
